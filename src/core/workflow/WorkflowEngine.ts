@@ -34,7 +34,7 @@ export class WorkflowEngine implements IWorkflowEngine {
     if (this.autoReload) {
       // Set up file watcher for auto-reload in production
       this.reloadInterval = setInterval(() => {
-        this.loadWorkflowsFromDir().catch(err => {
+        this.loadWorkflowsFromDir(true).catch(err => {
           logger.error('Failed to reload workflows:', err);
         });
       }, 60000); // Check every minute
@@ -62,10 +62,14 @@ export class WorkflowEngine implements IWorkflowEngine {
     logger.info('WorkflowEngine destroyed');
   }
 
-  loadWorkflow(workflow: WorkflowDefinition): void {
+  loadWorkflow(workflow: WorkflowDefinition, isReload = false): void {
     const key = this.getWorkflowKey(workflow.name, workflow.version);
     this.workflows.set(key, workflow);
-    logger.info(`Workflow loaded: ${workflow.name} v${workflow.version}`);
+    if (isReload) {
+      logger.debug(`Workflow reloaded: ${workflow.name} v${workflow.version}`);
+    } else {
+      logger.info(`Workflow loaded: ${workflow.name} v${workflow.version}`);
+    }
   }
 
   unloadWorkflow(name: string, version?: string): void {
@@ -416,10 +420,12 @@ export class WorkflowEngine implements IWorkflowEngine {
     return template;
   }
 
-  private async loadWorkflowsFromDir(): Promise<void> {
+  private async loadWorkflowsFromDir(isReload = false): Promise<void> {
     try {
       if (!fs.existsSync(this.workflowDir)) {
-        logger.warn(`Workflow directory not found: ${this.workflowDir}`);
+        if (!isReload) {
+          logger.warn(`Workflow directory not found: ${this.workflowDir}`);
+        }
         return;
       }
 
@@ -432,7 +438,7 @@ export class WorkflowEngine implements IWorkflowEngine {
           const workflow = yaml.load(content) as WorkflowDefinition;
 
           if (workflow && workflow.name && workflow.stages) {
-            this.loadWorkflow(workflow);
+            this.loadWorkflow(workflow, isReload);
           }
         } catch (error) {
           logger.error(`Failed to load workflow from ${file}:`, error);

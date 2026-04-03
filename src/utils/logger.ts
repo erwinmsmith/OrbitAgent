@@ -18,8 +18,10 @@ export function createLogger(): winston.Logger {
   }
 
   let config: { level: string; format: string; outputs?: Array<{ type: string; path?: string }> };
+  let appEnv = 'development';
   try {
     config = getConfig().logging;
+    appEnv = getConfig().app.env;
   } catch {
     // Default config if not loaded yet
     config = {
@@ -32,19 +34,36 @@ export function createLogger(): winston.Logger {
     };
   }
 
+  // In development mode, use debug level and pretty format by default
+  const isDev = appEnv === 'development';
+  const logLevel = isDev ? 'debug' : config.level;
+  const logFormat = isDev ? 'text' : config.format;
+
   const formats = [
-    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
+    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
     winston.format.errors({ stack: true }),
   ];
 
-  if (config.format === 'json') {
+  if (logFormat === 'json' && !isDev) {
     formats.push(winston.format.json());
   } else {
+    // Pretty format for dev mode
     formats.push(
-      winston.format.colorize(),
+      winston.format.colorize({ all: isDev }),
       winston.format.printf(({ level, message, timestamp, ...meta }) => {
-        const metaStr = Object.keys(meta).length ? JSON.stringify(meta) : '';
-        return `${timestamp} [${level}]: ${message} ${metaStr}`;
+        const metaKeys = Object.keys(meta);
+        let metaStr = '';
+        if (metaKeys.length > 0) {
+          // Pretty print meta objects
+          metaStr = ' ' + metaKeys.map(k => {
+            const v = meta[k];
+            if (typeof v === 'object' && v !== null) {
+              return `${k}=${JSON.stringify(v)}`;
+            }
+            return `${k}=${v}`;
+          }).join(' ');
+        }
+        return `${timestamp} [${level}] ${message}${metaStr}`;
       })
     );
   }
@@ -55,19 +74,19 @@ export function createLogger(): winston.Logger {
     if (output.type === 'console') {
       transports.push(
         new winston.transports.Console({
-          level: config.level,
+          level: logLevel,
         })
       );
     } else if (output.type === 'file' && output.path) {
       const logPath = path.resolve(process.cwd(), output.path);
-      const logDir = path.dirname(logPath);
-      if (!fs.existsSync(logDir)) {
-        fs.mkdirSync(logDir, { recursive: true });
+      const fileDir = path.dirname(logPath);
+      if (!fs.existsSync(fileDir)) {
+        fs.mkdirSync(fileDir, { recursive: true });
       }
       transports.push(
         new winston.transports.File({
           filename: logPath,
-          level: config.level,
+          level: logLevel,
           maxsize: 10 * 1024 * 1024, // 10MB
           maxFiles: 5,
         })
@@ -76,7 +95,7 @@ export function createLogger(): winston.Logger {
   }
 
   loggerInstance = winston.createLogger({
-    level: config.level,
+    level: logLevel,
     format: winston.format.combine(...formats),
     transports,
     exitOnError: false,

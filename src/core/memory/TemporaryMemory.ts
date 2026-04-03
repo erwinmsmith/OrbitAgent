@@ -40,6 +40,7 @@ export class TemporaryMemory implements TempMemoryOptions {
     const key = this.getKey(sessionId);
     const id = generateMessageId();
     const timestamp = now();
+    const startTime = Date.now();
 
     const messageData: TempMessage = {
       ...message,
@@ -71,7 +72,14 @@ export class TemporaryMemory implements TempMemoryOptions {
     // Enforce max pairs limit
     await this.enforceLimit(sessionId);
 
-    logger.debug('Added message to temporary memory', { sessionId, messageId: id });
+    const duration = Date.now() - startTime;
+    logger.debug(`[Redis] XADD ${key}`, {
+      sessionId,
+      messageId: id,
+      role: message.role,
+      contentPreview: message.content.substring(0, 50) + (message.content.length > 50 ? '...' : ''),
+      durationMs: duration,
+    });
   }
 
   private async enforceLimit(sessionId: string): Promise<void> {
@@ -102,8 +110,17 @@ export class TemporaryMemory implements TempMemoryOptions {
 
     const key = this.getKey(sessionId);
     const maxMessages = (limit || this.maxPairs) * 2;
+    const startTime = Date.now();
 
     const messages = await redis.xrange(key, '-', '+', 'COUNT', maxMessages);
+
+    const duration = Date.now() - startTime;
+    logger.debug(`[Redis] XRANGE ${key}`, {
+      sessionId,
+      count: messages.length,
+      requestedLimit: maxMessages,
+      durationMs: duration,
+    });
 
     return messages.map(([id, fields]) => {
       const data: Record<string, string> = {};

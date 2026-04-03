@@ -3,17 +3,19 @@ import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
 import rateLimit from 'express-rate-limit';
+import http from 'http';
 
 import { getConfig } from './config';
 import { logger } from './utils/logger';
-import { initializeDatabases, closeDatabases } from './services/database';
-import { initializeLLM, destroyLLM } from './core/llm/LLMFactory';
+import { initializeDatabases, closeDatabases, checkDatabasesHealth } from './services/database';
+import { initializeLLM, destroyLLM, getLLMManager } from './core/llm/LLMFactory';
 import { initializeSkillManager, destroySkillManager } from './core/skills/SkillManager';
 import { initializeToolManager, destroyToolManager } from './core/tools/ToolManager';
 import { initializeWorkflowEngine, destroyWorkflowEngine } from './core/workflow/WorkflowEngine';
 import { initializePromptManager, destroyPromptManager } from './core/prompts/PromptManager';
 import { getTemporaryMemory } from './core/memory/TemporaryMemory';
 import { getPermanentMemory } from './core/memory/PermanentMemory';
+import { initDevTestUser, getDevTestToken } from './services/DevAuth';
 import routes from './routes';
 import { errorHandler, notFoundHandler, requestLogger, rateLimitHandler } from './middleware/errorHandler';
 import { HTTP_STATUS } from './constants';
@@ -133,16 +135,133 @@ class Application {
     const { host, port } = this.config.app;
 
     return new Promise((resolve) => {
-      this.server = this.app.listen(port, host, () => {
+      this.server = this.app.listen(port, host, async () => {
         logger.info(`Server started`, {
           host,
           port,
           env: this.config.app.env,
           url: `http://${host}:${port}`,
         });
+
+        // Startup health check
+        await this.startupHealthCheck(host, port);
+
         resolve();
       });
     });
+  }
+
+  private async startupHealthCheck(host: string, port: number): Promise<void> {
+    const baseUrl = `http://${host}:${port}`;
+    const apiBase = `${baseUrl}${this.config.app.apiPrefix}`;
+    const checks: { name: string; status: 'pass' | 'fail'; detail?: string }[] = [];
+
+    logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    logger.info('🔍  Starting health checks...');
+    logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+    // 1. Check MongoDB
+    try {
+      const dbHealth = await checkDatabasesHealth();
+      if (dbHealth.mongodb) {
+        checks.push({ name: 'MongoDB', status: 'pass', detail: 'Connected' });
+        logger.info('  ✅ MongoDB    │ Connected');
+      } else {
+        checks.push({ name: 'MongoDB', status: 'fail', detail: 'Disconnected' });
+        logger.error('  ❌ MongoDB    │ Disconnected');
+      }
+    } catch (err) {
+      checks.push({ name: 'MongoDB', status: 'fail', detail: String(err) });
+      logger.error('  ❌ MongoDB    │ Error:', err);
+    }
+
+    // 2. Check Redis
+    try {
+      const dbHealth = await checkDatabasesHealth();
+      if (dbHealth.redis) {
+        checks.push({ name: 'Redis', status: 'pass', detail: 'Connected' });
+        logger.info('  ✅ Redis      │ Connected');
+      } else {
+        checks.push({ name: 'Redis', status: 'fail', detail: 'Disconnected' });
+        logger.error('  ❌ Redis      │ Disconnected');
+      }
+    } catch (err) {
+      checks.push({ name: 'Redis', status: 'fail', detail: String(err) });
+      logger.error('  ❌ Redis      │ Error:', err);
+    }
+
+    // 3. Check API /health endpoint
+    try {
+      const response = await fetch(`${apiBase}/health`);
+      if (response.ok) {
+        checks.push({ name: 'API /health', status: 'pass', detail: '200 OK' });
+        logger.info('  ✅ API Health │ 200 OK');
+      } else {
+        checks.push({ name: 'API /health', status: 'fail', detail: `${response.status}` });
+        logger.error(`  ❌ API Health │ ${response.status}`);
+      }
+    } catch (err) {
+      checks.push({ name: 'API /health', status: 'fail', detail: String(err) });
+      logger.error('  ❌ API Health │ Error:', err);
+    }
+
+    // 4. Check LLM Providers
+    try {
+      const llmManager = getLLMManager();
+      const llmHealth = await llmManager.healthCheck();
+      const healthyProviders = Object.entries(llmHealth)
+        .filter(([, healthy]) => healthy)
+        .map(([name]) => name);
+
+      if (healthyProviders.length > 0) {
+        checks.push({ name: 'LLM Providers', status: 'pass', detail: healthyProviders.join(', ') });
+        logger.info(`  ✅ LLM         │ ${healthyProviders.join(', ')}`);
+      } else {
+        checks.push({ name: 'LLM Providers', status: 'fail', detail: 'No providers available' });
+        logger.warn('  ⚠️  LLM         │ No providers available (check API keys)');
+      }
+    } catch (err) {
+      checks.push({ name: 'LLM Providers', status: 'fail', detail: String(err) });
+      logger.error('  ❌ LLM         │ Error:', err);
+    }
+
+    // Summary
+    const passed = checks.filter(c => c.status === 'pass').length;
+    const failed = checks.filter(c => c.status === 'fail').length;
+
+    logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    if (failed === 0) {
+      logger.info(`🚀  All systems ready! (${passed}/${checks.length} checks passed)`);
+      logger.info(`📖  API Docs: ${apiBase}/docs`);
+      logger.info(`📊  Status:   ${apiBase}/status/page`);
+      logger.info(`💰  Usage:    ${apiBase}/usage/page`);
+
+      // Dev mode: init test user and print token
+      if (this.config.app.env === 'development') {
+        try {
+          const devCreds = await initDevTestUser();
+          if (devCreds) {
+            logger.info('');
+            logger.info('🔧  [Dev Mode] Test User Ready:');
+            logger.info(`    Email:    ${devCreds.email}`);
+            logger.info(`    Password:  ${devCreds.password}`);
+            const devToken = await getDevTestToken();
+            if (devToken) {
+              logger.info(`    Token:    ${devToken}`);
+              logger.info('');
+              logger.info(`    Frontend usage: POST ${apiBase}/dev/token → returns token`);
+              logger.info(`    Or use:   Authorization: Bearer ${devToken}`);
+            }
+          }
+        } catch (err) {
+          logger.warn('    ⚠️  Dev test user init failed:', err);
+        }
+      }
+    } else {
+      logger.warn(`⚠️   ${failed} check(s) failed! (${passed}/${checks.length} passed)`);
+      logger.warn(`🔧  Review logs above for details`);
+    }
+    logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   }
 
   async stop(): Promise<void> {

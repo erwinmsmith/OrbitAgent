@@ -371,8 +371,8 @@ prompts:
   cacheEnabled: true
 
 logging:
-  level: "info"
-  format: "json"
+  level: "debug"
+  format: "text"
   outputs:
     - type: "console"
     - type: "file"
