@@ -1,6 +1,6 @@
 # OrbitAgent
 
-Modular conversation AI agent backend service with multi-LLM support.
+Modular conversation AI agent backend service with multi-user LLM support.
 
 ## Features
 
