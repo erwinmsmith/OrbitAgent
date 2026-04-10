@@ -11,16 +11,18 @@ const router = Router();
 
 // Validation schemas
 const registerSchema = Joi.object({
-  email: Joi.string().email().required(),
+  email: Joi.string().email().optional(),
+  phone: Joi.string().pattern(/^\+?[0-9]{7,15}$/).optional(),
   username: Joi.string().alphanum().min(3).max(30).required(),
-  password: Joi.string().min(8).required(),
+  password: Joi.string().min(6).required(),
   displayName: Joi.string().max(50).optional(),
-});
+}).or('email', 'phone'); // at least one identifier required
 
 const loginSchema = Joi.object({
-  email: Joi.string().email().required(),
+  email: Joi.string().email().optional(),
+  phone: Joi.string().pattern(/^\+?[0-9]{7,15}$/).optional(),
   password: Joi.string().required(),
-});
+}).or('email', 'phone'); // at least one identifier required
 
 // Register
 router.post('/register', asyncHandler(async (req: Request, res: Response) => {
@@ -29,28 +31,40 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
     throw new AppError('VALIDATION_ERROR', error.message, HTTP_STATUS.BAD_REQUEST);
   }
 
-  const { email, username, password, displayName } = value;
+  const { email, phone, username, password, displayName } = value;
 
   // Check if user exists
   const existingUser = await UserModel.findOne({
-    $or: [{ email }, { username }],
+    $or: [
+      ...(email ? [{ email }] : []),
+      ...(phone ? [{ phone }] : []),
+      { username },
+    ],
   });
 
   if (existingUser) {
     throw new AppError(
       'USER_EXISTS',
-      'User with this email or username already exists',
+      'User with this email, phone, or username already exists',
       HTTP_STATUS.CONFLICT
     );
   }
 
-  // Create user
-  const user = await UserModel.create({
-    email,
+  // Build user object — email is required in JWT, use phone as fallback
+  const userPayload: any = {
     username,
     password,
     displayName: displayName || username,
-  });
+    ...(email ? { email } : {}),
+    ...(phone ? { phone } : {}),
+  };
+
+  // If neither email nor phone, generate a placeholder email
+  if (!email && !phone) {
+    userPayload.email = `${username}@orbit.local`;
+  }
+
+  const user = await UserModel.create(userPayload);
 
   // Generate tokens
   const accessToken = require('../middleware/auth').generateToken(user);
@@ -75,10 +89,14 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
     throw new AppError('VALIDATION_ERROR', error.message, HTTP_STATUS.BAD_REQUEST);
   }
 
-  const { email, password } = value;
+  const { email, phone, password } = value;
 
-  // Find user with password
-  const user = await UserModel.findOne({ email }).select('+password');
+  // Find user by email or phone
+  const query: Record<string, any> = {};
+  if (email) query.email = email;
+  if (phone) query.phone = phone;
+
+  const user = await UserModel.findOne(query).select('+password');
 
   if (!user) {
     throw new AppError('INVALID_CREDENTIALS', 'Invalid email or password', HTTP_STATUS.UNAUTHORIZED);

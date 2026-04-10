@@ -1,5 +1,52 @@
 import { UserModel } from '../models/User';
+import { UserProfileModel } from '../models/UserProfile';
 import { logger } from '../utils/logger';
+
+/**
+ * Seed a pre-registered admin account for development
+ * Credentials: admin@orbit.local / orbit_admin_2026
+ */
+export async function initDevAdminUser(): Promise<{ email: string; password: string } | null> {
+  const isDev = process.env.NODE_ENV !== 'production';
+  if (!isDev) return null;
+
+  const adminEmail = process.env.DEV_ADMIN_EMAIL || 'admin@orbit.local';
+  const adminPassword = process.env.DEV_ADMIN_PASSWORD || 'orbit_admin_2026';
+
+  try {
+    const existing = await UserModel.findOne({ email: adminEmail }).select('+password');
+    if (existing) {
+      logger.info(`[DevAuth] Using existing admin user: ${adminEmail}`);
+      return { email: adminEmail, password: adminPassword };
+    }
+
+    const admin = new UserModel({
+      email: adminEmail,
+      username: 'admin',
+      password: adminPassword,
+      displayName: 'Administrator',
+      isActive: true,
+      isAdmin: true,
+    });
+
+    await admin.save();
+
+    // Create associated user profile
+    await UserProfileModel.create({
+      userId: admin._id.toString(),
+      badges: ['admin'],
+      tags: ['管理员'],
+    });
+
+    logger.info(`[DevAuth] Created admin user: ${adminEmail} / ${adminPassword}`);
+    logger.info(`[DevAuth] Admin login: POST /auth/login with the credentials above`);
+
+    return { email: adminEmail, password: adminPassword };
+  } catch (error) {
+    logger.error('[DevAuth] Failed to init admin user:', error);
+    return null;
+  }
+}
 
 /**
  * Dev 模式下自动准备测试用户

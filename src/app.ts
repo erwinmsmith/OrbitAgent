@@ -15,7 +15,7 @@ import { initializeWorkflowEngine, destroyWorkflowEngine } from './core/workflow
 import { initializePromptManager, destroyPromptManager } from './core/prompts/PromptManager';
 import { getTemporaryMemory } from './core/memory/TemporaryMemory';
 import { getPermanentMemory } from './core/memory/PermanentMemory';
-import { initDevTestUser, getDevTestToken } from './services/DevAuth';
+import { initDevTestUser, initDevAdminUser, getDevTestToken } from './services/DevAuth';
 import routes from './routes';
 import { errorHandler, notFoundHandler, requestLogger, rateLimitHandler } from './middleware/errorHandler';
 import { HTTP_STATUS } from './constants';
@@ -236,9 +236,18 @@ class Application {
       logger.info(`📊  Status:   ${apiBase}/status/page`);
       logger.info(`💰  Usage:    ${apiBase}/usage/page`);
 
-      // Dev mode: init test user and print token
+      // Dev mode: init admin + test user and print credentials
       if (this.config.app.env === 'development') {
         try {
+          // Seed admin account
+          const adminCreds = await initDevAdminUser();
+          if (adminCreds) {
+            logger.info('🔐  [Dev Mode] Admin Account Ready:');
+            logger.info(`    Email:    ${adminCreds.email}`);
+            logger.info(`    Password:  ${adminCreds.password}`);
+          }
+          logger.info('');
+
           const devCreds = await initDevTestUser();
           if (devCreds) {
             logger.info('');
