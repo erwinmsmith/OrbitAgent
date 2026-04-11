@@ -10,8 +10,9 @@ Modular conversation AI agent backend service with multi-user LLM support.
 - **Tool/MCP Integration**: Local and remote MCP server support
 - **Workflow Engine**: YAML-based workflow definition and execution
 - **Prompt Management**: Template-based prompt system with variable substitution
-- **JWT + API Key Authentication**: Dual authentication system
+- **JWT + API Key Authentication**: Dual authentication system with email or phone login
 - **Token Usage Tracking**: Automatic token counting and cost calculation per model (USD)
+- **User Management**: Profiles, check-in streaks, ritual task history, shared feed
 - **RESTful API**: Clean API interface for Swift/Web frontends
 - **API Documentation**: Interactive API docs page with search and examples
 
@@ -142,7 +143,62 @@ curl http://localhost:3000/api/v1/models \
   -H "Authorization: Bearer <your-token>"
 ```
 
-### 5. Check Token Usage
+### 5. Register with Phone
+
+```bash
+curl -X POST http://localhost:3000/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "phone": "13800138000",
+    "username": "myuser",
+    "password": "password123"
+  }'
+```
+
+### 6. Check Token Usage
+
+### 7. Check-in & Get User Profile
+
+```bash
+# Get profile (streak, badges)
+curl http://localhost:3000/api/v1/users/profile \
+  -H "Authorization: Bearer <token>"
+
+# Daily check-in
+curl -X POST http://localhost:3000/api/v1/users/profile/check-in \
+  -H "Authorization: Bearer <token>"
+
+# User stats (rituals count, likes, streak)
+curl http://localhost:3000/api/v1/users/profile/stats \
+  -H "Authorization: Bearer <token>"
+```
+
+### 8. Ritual Tasks
+
+```bash
+# List user's ritual tasks
+curl "http://localhost:3000/api/v1/users/tasks?page=1&limit=10" \
+  -H "Authorization: Bearer <token>"
+
+# Get public feed (no auth)
+curl "http://localhost:3000/api/v1/users/tasks/feed?page=1&limit=20"
+
+# Create a ritual task
+curl -X POST http://localhost:3000/api/v1/users/tasks \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{
+    "triggerSymbol": "山",
+    "mode": "decision",
+    "question": "我该做出什么决定？"
+  }'
+
+# Like a task
+curl -X POST http://localhost:3000/api/v1/users/tasks/<taskId>/like \
+  -H "Authorization: Bearer <token>"
+```
+
+### 9. View API Documentation
 
 ```bash
 curl http://localhost:3000/api/v1/usage/stats \
@@ -181,11 +237,33 @@ Open in browser:
 ### Authentication
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/v1/auth/register` | Register new user |
-| POST | `/api/v1/auth/login` | Login |
+| POST | `/api/v1/auth/register` | Register new user (email or phone) |
+| POST | `/api/v1/auth/login` | Login with email or phone |
 | POST | `/api/v1/auth/refresh` | Refresh token |
 | GET | `/api/v1/auth/me` | Get current user |
+| PUT | `/api/v1/auth/me` | Update current user profile |
 | POST | `/api/v1/auth/api-key` | Generate API key |
+| GET | `/api/v1/auth/api-keys` | List API keys |
+| DELETE | `/api/v1/auth/api-key/:keyId` | Revoke API key |
+| POST | `/api/v1/auth/logout` | Logout |
+
+### Users (JWT required)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/users/profile` | Get user profile (streak, badges) |
+| PUT | `/api/v1/users/profile` | Update profile fields |
+| POST | `/api/v1/users/profile/check-in` | Daily check-in |
+| GET | `/api/v1/users/profile/stats` | User stats (rituals, likes, streak) |
+| GET | `/api/v1/users/profile/token-stats` | Token usage breakdown by model & daily |
+| GET | `/api/v1/users/profile/token-usage/recent` | Recent token usage records |
+| POST | `/api/v1/users/tasks` | Create a ritual conversation task |
+| GET | `/api/v1/users/tasks` | List user's ritual tasks (paginated) |
+| GET | `/api/v1/users/tasks/feed` | Public shared ritual feed |
+| GET | `/api/v1/users/tasks/:taskId` | Get a single task |
+| PUT | `/api/v1/users/tasks/:taskId` | Update task (response, archive, share) |
+| POST | `/api/v1/users/tasks/:taskId/like` | Like a task |
+| POST | `/api/v1/users/tasks/:taskId/archive` | Archive a task |
+| DELETE | `/api/v1/users/tasks/:taskId` | Delete a task |
 
 ### Chat
 | Method | Endpoint | Description |
