@@ -71,6 +71,9 @@ export interface UserStatsSummary {
   totalFollowing: number;
   checkInStreak: number;
   badges: string[];
+  totalTokens: number;
+  totalCost: number;
+  requestCount: number;
 }
 
 // ─── Module exports ──────────────────────────────────────────────────

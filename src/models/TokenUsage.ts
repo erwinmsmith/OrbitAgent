@@ -58,6 +58,12 @@ export const MODEL_PRICING: Record<string, { input: number; output: number }> = 
   'codellama':         { input: 0, output: 0 },
   'phi3':              { input: 0, output: 0 },
 
+  // SiliconFlow (OpenAI compatible — used by frontend by default)
+  'Qwen/Qwen2.5-7B-Instruct': { input: 0, output: 0 },  // free tier
+  'Qwen/Qwen3-32B':           { input: 0, output: 0 },  // free tier
+  'deepseek-ai/DeepSeek-V2.5': { input: 0, output: 0 },  // free tier
+  'THUDM/glm-4-9b-chat':       { input: 0, output: 0 },  // free tier
+
   // OpenAI Compatible
   'moonshot-v1-8k':    { input: 1, output: 2 },
   'moonshot-v1-32k':   { input: 1, output: 2 },

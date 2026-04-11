@@ -1,5 +1,6 @@
 import { UserProfileModel, IUserProfile } from '../models/UserProfile';
 import { ConversationTaskModel, IConversationTask } from '../models/ConversationTask';
+import { getTokenService } from '../services/TokenService';
 import {
   UpdateProfileDTO,
   CreateConversationTaskDTO,
@@ -97,10 +98,14 @@ export class UserService {
   }
 
   /**
-   * Get user stats summary (from profile)
+   * Get user stats summary (profile + token usage)
    */
   async getUserStats(userId: string): Promise<UserStatsSummary> {
-    const profile = await this.getOrCreateProfile(userId);
+    const [profile, tokenStats] = await Promise.all([
+      this.getOrCreateProfile(userId),
+      getTokenService().getUserTotalStats(userId),
+    ]);
+
     return {
       totalRituals: profile.totalRituals,
       totalLikes: profile.totalLikes,
@@ -108,6 +113,9 @@ export class UserService {
       totalFollowing: profile.totalFollowing,
       checkInStreak: profile.checkInStreak,
       badges: profile.badges || [],
+      totalTokens: tokenStats.totalTokens || 0,
+      totalCost: tokenStats.totalCost || 0,
+      requestCount: tokenStats.requestCount || 0,
     };
   }
 
@@ -153,7 +161,7 @@ export class UserService {
   /**
    * List tasks for a user with pagination and filters
    */
-  async listTasks(userId: string, query: TaskListQuery = {}): Promise<PaginatedResult<IConversationTask>> {
+  async listTasks(userId: string, query: TaskListQuery = {}): Promise<PaginatedResult<IConversationTask> > {
     const page = Math.max(1, query.page || 1);
     const limit = Math.min(50, Math.max(1, query.limit || 20));
     const skip = (page - 1) * limit;
@@ -246,7 +254,7 @@ export class UserService {
   async getSharedTasksFeed(
     page = 1,
     limit = 20
-  ): Promise<PaginatedResult<IConversationTask>> {
+  ): Promise<PaginatedResult<IConversationTask> > {
     const skip = (page - 1) * limit;
     const [items, total] = await Promise.all([
       ConversationTaskModel.find({ isShared: true, isArchived: false })

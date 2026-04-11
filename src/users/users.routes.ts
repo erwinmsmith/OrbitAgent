@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { asyncHandler } from '../middleware/errorHandler';
 import { authMiddleware } from '../middleware/auth';
 import { getUserService } from './UserService';
+import { getTokenService } from '../services/TokenService';
 import { HTTP_STATUS } from '../constants';
 import { logger } from '../utils/logger';
 
@@ -11,6 +12,7 @@ const router = Router();
 router.use(authMiddleware(true));
 
 const userService = getUserService();
+const tokenService = getTokenService();
 
 // ─── Profile ─────────────────────────────────────────────────────────
 
@@ -62,7 +64,7 @@ router.post('/profile/check-in', asyncHandler(async (req: Request, res: Response
 
 /**
  * GET /users/profile/stats
- * Get user stats summary
+ * Get user stats summary (rituals, likes, streak)
  */
 router.get('/profile/stats', asyncHandler(async (req: Request, res: Response) => {
   const userId = req.user!.userId;
@@ -71,6 +73,80 @@ router.get('/profile/stats', asyncHandler(async (req: Request, res: Response) =>
   res.json({
     success: true,
     data: stats,
+  });
+}));
+
+/**
+ * GET /users/profile/token-stats
+ * Get user's token usage summary from TokenService
+ */
+router.get('/profile/token-stats', asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.user!.userId;
+  const { startDate, endDate } = req.query;
+
+  const start = startDate ? new Date(startDate as string) : undefined;
+  const end = endDate ? new Date(endDate as string) : undefined;
+
+  const [total, byModel, daily] = await Promise.all([
+    tokenService.getUserTotalStats(userId, start, end),
+    tokenService.getUserStatsByModel(userId, start, end),
+    tokenService.getDailyStats(userId, 30),
+  ]);
+
+  res.json({
+    success: true,
+    data: {
+      summary: {
+        totalPromptTokens: total.totalPromptTokens || 0,
+        totalCompletionTokens: total.totalCompletionTokens || 0,
+        totalTokens: total.totalTokens || 0,
+        totalCost: total.totalCost || 0,
+        requestCount: total.requestCount || 0,
+      },
+      byModel: byModel.map((m: any) => ({
+        modelId: m._id.modelId,
+        modelProvider: m._id.modelProvider,
+        totalPromptTokens: m.totalPromptTokens,
+        totalCompletionTokens: m.totalCompletionTokens,
+        totalTokens: m.totalTokens,
+        totalCost: m.totalCost,
+        requestCount: m.requestCount,
+      })),
+      daily: daily.map((d: any) => ({
+        date: `${d._id.year}-${String(d._id.month).padStart(2, '0')}-${String(d._id.day).padStart(2, '0')}`,
+        totalTokens: d.totalTokens,
+        totalCost: d.totalCost,
+        requestCount: d.requestCount,
+      })),
+    },
+  });
+}));
+
+/**
+ * GET /users/profile/token-usage/recent
+ * Get recent token usage records
+ */
+router.get('/profile/token-usage/recent', asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.user!.userId;
+  const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
+  const skip = parseInt(req.query.skip as string) || 0;
+
+  const records = await tokenService.getRecentUsage(userId, limit, skip);
+
+  res.json({
+    success: true,
+    data: records.map((r: any) => ({
+      id: r._id,
+      modelId: r.modelId,
+      modelProvider: r.modelProvider,
+      promptTokens: r.promptTokens,
+      completionTokens: r.completionTokens,
+      totalTokens: r.totalTokens,
+      totalCost: r.totalCost,
+      requestType: r.requestType,
+      createdAt: r.createdAt,
+    })),
+    pagination: { limit, skip },
   });
 }));
 
