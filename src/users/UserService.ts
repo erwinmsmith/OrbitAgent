@@ -168,7 +168,7 @@ export class UserService {
     const sortOrder = query.sortOrder === 'asc' ? 1 : -1;
     const sortField = query.sortBy || 'createdAt';
 
-    const filter: Record<string, any> = { userId };
+    const filter: Record<string, string | boolean> = { userId };
     if (query.archived !== undefined) {
       filter.isArchived = query.archived;
     }

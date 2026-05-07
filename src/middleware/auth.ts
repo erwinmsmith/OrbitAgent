@@ -198,30 +198,36 @@ export function requirePermission(...permissions: string[]) {
 }
 
 // Generate JWT token
-export function generateToken(user: { id: string; email: string; isAdmin: boolean }): string {
+export function generateToken(user: { id?: string; _id?: unknown; email: string; isAdmin: boolean }): string {
+  const userId = user.id ?? String(user._id);
   const config = authConfig();
   return jwt.sign(
-    { userId: user.id, email: user.email, isAdmin: user.isAdmin },
+    { userId, email: user.email, isAdmin: user.isAdmin },
     config.jwt.secret,
     { expiresIn: config.jwt.expiry }
   );
 }
 
 // Generate refresh token
-export function generateRefreshToken(user: { id: string }): string {
+export function generateRefreshToken(user: { id?: string; _id?: unknown }): string {
+  const userId = user.id ?? String(user._id);
   const config = authConfig();
   return jwt.sign(
-    { userId: user.id, type: 'refresh' },
+    { userId, type: 'refresh' },
     config.jwt.secret,
     { expiresIn: config.jwt.refreshExpiry }
   );
 }
 
 // Verify refresh token
+interface RefreshTokenPayload {
+  userId: string;
+  type: string;
+}
 export function verifyRefreshToken(token: string): { userId: string } | null {
   try {
     const config = authConfig();
-    const decoded = jwt.verify(token, config.jwt.secret) as any;
+    const decoded = jwt.verify(token, config.jwt.secret) as RefreshTokenPayload;
     if (decoded.type !== 'refresh') {
       return null;
     }

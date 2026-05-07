@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import Joi from 'joi';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, generateToken, generateRefreshToken, verifyRefreshToken } from '../middleware/auth';
 import { UserModel } from '../models/User';
 import { ApiKeyModel } from '../models/ApiKey';
 import { HTTP_STATUS } from '../constants';
@@ -51,7 +51,14 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
   }
 
   // Build user object — email is required in JWT, use phone as fallback
-  const userPayload: any = {
+  interface UserCreatePayload {
+    username: string;
+    password: string;
+    displayName: string;
+    email?: string;
+    phone?: string;
+  }
+  const userPayload: UserCreatePayload = {
     username,
     password,
     displayName: displayName || username,
@@ -67,8 +74,8 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
   const user = await UserModel.create(userPayload);
 
   // Generate tokens
-  const accessToken = require('../middleware/auth').generateToken(user);
-  const refreshToken = require('../middleware/auth').generateRefreshToken(user);
+  const accessToken = generateToken(user);
+  const refreshToken = generateRefreshToken(user);
 
   logger.info(`User registered: ${user.email}`);
 
@@ -92,7 +99,7 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
   const { email, phone, password } = value;
 
   // Find user by email or phone
-  const query: Record<string, any> = {};
+  const query: { email?: string; phone?: string } = {};
   if (email) query.email = email;
   if (phone) query.phone = phone;
 
@@ -117,8 +124,8 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
   await user.save();
 
   // Generate tokens
-  const accessToken = require('../middleware/auth').generateToken(user);
-  const refreshToken = require('../middleware/auth').generateRefreshToken(user);
+  const accessToken = generateToken(user);
+  const refreshToken = generateRefreshToken(user);
 
   logger.info(`User logged in: ${user.email}`);
 
@@ -140,7 +147,7 @@ router.post('/refresh', asyncHandler(async (req: Request, res: Response) => {
     throw new AppError('MISSING_TOKEN', 'Refresh token is required', HTTP_STATUS.BAD_REQUEST);
   }
 
-  const payload = require('../middleware/auth').verifyRefreshToken(refreshToken);
+  const payload = verifyRefreshToken(refreshToken);
   if (!payload) {
     throw new AppError('INVALID_TOKEN', 'Invalid refresh token', HTTP_STATUS.UNAUTHORIZED);
   }
@@ -152,8 +159,8 @@ router.post('/refresh', asyncHandler(async (req: Request, res: Response) => {
   }
 
   // Generate new tokens
-  const newAccessToken = require('../middleware/auth').generateToken(user);
-  const newRefreshToken = require('../middleware/auth').generateRefreshToken(user);
+  const newAccessToken = generateToken(user);
+  const newRefreshToken = generateRefreshToken(user);
 
   res.json({
     success: true,
@@ -188,7 +195,11 @@ router.put('/me', authMiddleware(), asyncHandler(async (req: Request, res: Respo
     throw new AppError('USER_NOT_FOUND', 'User not found', HTTP_STATUS.NOT_FOUND);
   }
 
-  const updateData: any = {};
+  interface UserUpdatePayload {
+    displayName?: string;
+    preferences?: Record<string, unknown>;
+  }
+  const updateData: UserUpdatePayload = {};
   if (displayName) updateData.displayName = displayName;
   if (preferences) updateData.preferences = { ...currentUser.preferences, ...preferences };
 

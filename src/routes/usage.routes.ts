@@ -6,6 +6,25 @@ import { MODEL_PRICING } from '../models/TokenUsage';
 
 const router = Router();
 
+// Aggregation result types (eliminate `any`)
+interface ByModelResult {
+  _id: { modelId: string; modelProvider: string };
+  totalPromptTokens: number;
+  totalCompletionTokens: number;
+  totalTokens: number;
+  totalCost: number;
+  requestCount: number;
+}
+
+interface DailyResult {
+  _id: { year: number; month: number; day: number };
+  totalPromptTokens: number;
+  totalCompletionTokens: number;
+  totalTokens: number;
+  totalCost: number;
+  requestCount: number;
+}
+
 // All routes require authentication
 router.use(apiKeyMiddleware);
 router.use(authMiddleware(false));
@@ -35,7 +54,7 @@ router.get('/stats', asyncHandler(async (req: Request, res: Response) => {
     success: true,
     data: {
       summary: totalStats,
-      byModel: byModel.map((m: any) => ({
+      byModel: byModel.map((m: ByModelResult) => ({
         modelId: m._id.modelId,
         modelProvider: m._id.modelProvider,
         totalPromptTokens: m.totalPromptTokens,
@@ -44,7 +63,7 @@ router.get('/stats', asyncHandler(async (req: Request, res: Response) => {
         totalCost: m.totalCost,
         requestCount: m.requestCount,
       })),
-      daily: dailyStats.map((d: any) => ({
+      daily: dailyStats.map((d: DailyResult) => ({
         date: `${d._id.year}-${String(d._id.month).padStart(2, '0')}-${String(d._id.day).padStart(2, '0')}`,
         totalPromptTokens: d.totalPromptTokens,
         totalCompletionTokens: d.totalCompletionTokens,
@@ -141,7 +160,7 @@ router.get('/page', asyncHandler(async (req: Request, res: Response) => {
     tokenService.getRecentUsage(userId, 20),
   ]);
 
-  const byModelRows = byModel.map((m: any) => `
+  const byModelRows = byModel.map((m: ByModelResult) => `
     <tr>
       <td>${m._id.modelProvider}</td>
       <td>${m._id.modelId}</td>
@@ -153,7 +172,7 @@ router.get('/page', asyncHandler(async (req: Request, res: Response) => {
     </tr>
   `).join('');
 
-  const dailyRows = dailyStats.map((d: any) => `
+  const dailyRows = dailyStats.map((d: DailyResult) => `
     <tr>
       <td>${d._id.year}-${String(d._id.month).padStart(2, '0')}-${String(d._id.day).padStart(2, '0')}</td>
       <td>${d.requestCount}</td>

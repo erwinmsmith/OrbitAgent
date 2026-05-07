@@ -8,6 +8,37 @@ import { logger } from '../utils/logger';
 
 const router = Router();
 
+// Aggregation result types (eliminate `any`)
+interface ByModelResult {
+  _id: { modelId: string; modelProvider: string };
+  totalPromptTokens: number;
+  totalCompletionTokens: number;
+  totalTokens: number;
+  totalCost: number;
+  requestCount: number;
+}
+
+interface DailyResult {
+  _id: { year: number; month: number; day: number };
+  totalPromptTokens: number;
+  totalCompletionTokens: number;
+  totalTokens: number;
+  totalCost: number;
+  requestCount: number;
+}
+
+interface TokenUsageRecord {
+  _id: unknown;
+  modelId: string;
+  modelProvider: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  totalCost: number;
+  requestType: string;
+  createdAt: Date;
+}
+
 // All routes require authentication
 router.use(authMiddleware(true));
 
@@ -103,7 +134,7 @@ router.get('/profile/token-stats', asyncHandler(async (req: Request, res: Respon
         totalCost: total.totalCost || 0,
         requestCount: total.requestCount || 0,
       },
-      byModel: byModel.map((m: any) => ({
+      byModel: byModel.map((m: ByModelResult) => ({
         modelId: m._id.modelId,
         modelProvider: m._id.modelProvider,
         totalPromptTokens: m.totalPromptTokens,
@@ -112,7 +143,7 @@ router.get('/profile/token-stats', asyncHandler(async (req: Request, res: Respon
         totalCost: m.totalCost,
         requestCount: m.requestCount,
       })),
-      daily: daily.map((d: any) => ({
+      daily: daily.map((d: DailyResult) => ({
         date: `${d._id.year}-${String(d._id.month).padStart(2, '0')}-${String(d._id.day).padStart(2, '0')}`,
         totalTokens: d.totalTokens,
         totalCost: d.totalCost,
@@ -135,7 +166,7 @@ router.get('/profile/token-usage/recent', asyncHandler(async (req: Request, res:
 
   res.json({
     success: true,
-    data: records.map((r: any) => ({
+    data: records.map((r: TokenUsageRecord) => ({
       id: r._id,
       modelId: r.modelId,
       modelProvider: r.modelProvider,
@@ -186,8 +217,8 @@ router.get('/tasks', asyncHandler(async (req: Request, res: Response) => {
     page: page ? parseInt(page as string) : 1,
     limit: limit ? parseInt(limit as string) : 20,
     archived: archived !== undefined ? archived === 'true' : undefined,
-    sortBy: sortBy as any,
-    sortOrder: sortOrder as any,
+    sortBy: sortBy as 'createdAt' | 'likedCount' | 'sharedCount',
+    sortOrder: sortOrder as 'asc' | 'desc',
   });
 
   res.json({

@@ -126,7 +126,7 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
 
   // Execute skills (preprocessing)
   const skillManager = getSkillManager();
-  let contextVariables: Record<string, any> = {};
+  let contextVariables: Record<string, unknown> = {};
 
   if (skillManager) {
     const currentMessage = {
@@ -191,18 +191,20 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
   const t4 = Date.now();
   const conversation = await permanentMemory.getConversationBySessionId(session);
   if (conversation) {
-    await permanentMemory.addMessage(conversation.id, {
-      role: 'user',
-      content: trimmedMessage,
-      modelId: model,
-      modelProvider: provider,
-    });
-    await permanentMemory.addMessage(conversation.id, {
-      role: 'assistant',
-      content: response.content,
-      modelId: response.model,
-      modelProvider: response.provider,
-    });
+    await Promise.all([
+      permanentMemory.addMessage(conversation.id, {
+        role: 'user',
+        content: trimmedMessage,
+        modelId: model,
+        modelProvider: provider,
+      }),
+      permanentMemory.addMessage(conversation.id, {
+        role: 'assistant',
+        content: response.content,
+        modelId: response.model,
+        modelProvider: response.provider,
+      }),
+    ]);
   }
   logger.debug(`[Chat] MongoDB save done`, {
     durationMs: Date.now() - t4,
@@ -324,21 +326,22 @@ router.post('/stream', async (req: Request, res: Response) => {
         res.write(`data: ${JSON.stringify({ type: 'content', content: chunk.content })}\n\n`);
       } else if (chunk.type === 'done') {
         // Save to temporary memory
-        await tempMemory.addMessage(session, {
-          userId,
-          sessionId: session,
-          role: 'user',
-          content: trimmedMessage,
-        });
-
-        await tempMemory.addMessage(session, {
-          userId,
-          sessionId: session,
-          role: 'assistant',
-          content: fullContent,
-          modelId: model,
-          modelProvider: provider,
-        });
+        await Promise.all([
+          tempMemory.addMessage(session, {
+            userId,
+            sessionId: session,
+            role: 'user',
+            content: trimmedMessage,
+          }),
+          tempMemory.addMessage(session, {
+            userId,
+            sessionId: session,
+            role: 'assistant',
+            content: fullContent,
+            modelId: model,
+            modelProvider: provider,
+          }),
+        ]);
 
         // Record token usage for stream
         if (chunk.usage && chunk.usage.totalTokens > 0) {
