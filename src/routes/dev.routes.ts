@@ -45,8 +45,10 @@ router.post('/token', asyncHandler(async (_req: Request, res: Response) => {
   const jwt = require('jsonwebtoken');
   const config = require('../config').getConfig();
 
+  // Mirror the production auth flow's payload shape so the dev token can
+  // pass through `adminOnly` middleware (e.g. for skill uninstall).
   const token = jwt.sign(
-    { userId: user._id, email: user.email },
+    { userId: user._id, email: user.email, isAdmin: !!user.isAdmin },
     config.auth.jwt.secret,
     { expiresIn: '30d' }
   );
