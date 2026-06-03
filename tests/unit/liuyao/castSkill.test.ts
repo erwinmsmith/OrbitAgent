@@ -1,0 +1,52 @@
+/**
+ * Unit tests for the six-yang casting skill. Pure logic — no DB.
+ */
+import { castSkill } from '../../../src/liuyao/skills/castSkill';
+import { threeCoinsToYaoValue, yaoYinYang, isMoving } from '../../../src/liuyao/constants/yao';
+
+describe('castSkill (manual 0/1 → yao values)', () => {
+  it('maps 0 → 8 (yin, static) and 1 → 7 (yang, static)', () => {
+    const r = castSkill({ bits: [0, 1, 0, 1, 0, 1] });
+    expect(r.rawValues).toEqual([8, 7, 8, 7, 8, 7]);
+    expect(r.movingPositions).toEqual([]);
+    expect(r.linesBottomToTop.map((l) => l.yinYang)).toEqual(['阴', '阳', '阴', '阳', '阴', '阳']);
+  });
+
+  it('rejects input that is not 6 bits', () => {
+    expect(() => castSkill({ bits: [0, 1, 1] as any })).toThrow();
+  });
+
+  it('rejects interpretation=coin in MVP', () => {
+    expect(() => castSkill({ bits: [0, 0, 0, 0, 0, 0], interpretation: 'coin' })).toThrow(/not supported in MVP/);
+  });
+});
+
+describe('threeCoinsToYaoValue (火珠林)', () => {
+  it('3 backs → 9 (old yang, moving)', () => {
+    expect(threeCoinsToYaoValue([0, 0, 0])).toBe(9);
+  });
+  it('3 faces → 6 (old yin, moving)', () => {
+    expect(threeCoinsToYaoValue([1, 1, 1])).toBe(6);
+  });
+  it('1 back → 7 (少阳, static)', () => {
+    expect(threeCoinsToYaoValue([0, 1, 1])).toBe(7);
+  });
+  it('2 backs → 8 (少阴, static)', () => {
+    expect(threeCoinsToYaoValue([0, 0, 1])).toBe(8);
+  });
+});
+
+describe('yao helpers', () => {
+  it('yaoYinYang', () => {
+    expect(yaoYinYang(6)).toBe('阴');
+    expect(yaoYinYang(7)).toBe('阳');
+    expect(yaoYinYang(8)).toBe('阴');
+    expect(yaoYinYang(9)).toBe('阳');
+  });
+  it('isMoving', () => {
+    expect(isMoving(6)).toBe(true);
+    expect(isMoving(9)).toBe(true);
+    expect(isMoving(7)).toBe(false);
+    expect(isMoving(8)).toBe(false);
+  });
+});
