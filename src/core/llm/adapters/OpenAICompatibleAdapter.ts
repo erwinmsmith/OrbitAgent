@@ -4,6 +4,8 @@ import { logger } from '../../../utils/logger';
 
 export interface OpenAICompatibleConfig {
   name: string;
+  /** Provider key used for tagging responses + token usage records (e.g. 'siliconflow', 'kimi'). */
+  provider: LLMProvider;
   baseUrl: string;
   apiKey: string;
   timeout?: number;
@@ -25,7 +27,7 @@ export interface OpenAICompatibleConfig {
  */
 export class OpenAICompatibleAdapter implements ILLMAdapter {
   readonly name: string;
-  readonly provider: LLMProvider = 'openai';
+  readonly provider: LLMProvider;
 
   private client: AxiosInstance;
   private availableModels: string[];
@@ -35,6 +37,7 @@ export class OpenAICompatibleAdapter implements ILLMAdapter {
   constructor(config: OpenAICompatibleConfig) {
     this.config = config;
     this.name = `${config.name}Adapter`;
+    this.provider = config.provider;
     this.defaultModelId = config.defaultModel || config.models?.[0] || 'gpt-3.5-turbo';
     this.availableModels = config.models || [];
 
@@ -112,6 +115,7 @@ export class OpenAICompatibleAdapter implements ILLMAdapter {
           inputTokens: data.usage.prompt_tokens,
           outputTokens: data.usage.completion_tokens,
           totalTokens: data.usage.total_tokens,
+          cacheHitTokens: data.usage.prompt_tokens_details?.cached_tokens ?? 0,
         } : undefined,
         toolCalls: choice.message.tool_calls?.map((tc: any) => ({
           id: tc.id,
@@ -121,8 +125,12 @@ export class OpenAICompatibleAdapter implements ILLMAdapter {
         raw: data,
       };
     } catch (error: any) {
-      logger.error(`${this.config.name} chat error:`, error.message);
-      throw new Error(`${this.config.name} API error: ${error.response?.data?.error?.message || error.message}`);
+      const msg = error?.response?.data?.error?.message
+        || error?.response?.data?.message
+        || error?.message
+        || String(error);
+      logger.error(`${this.config.name} chat error: ${msg}`);
+      throw new Error(`${this.config.name} API error: ${msg}`);
     }
   }
 
@@ -180,8 +188,12 @@ export class OpenAICompatibleAdapter implements ILLMAdapter {
 
       yield { type: 'done', content: fullContent, finishReason };
     } catch (error: any) {
-      logger.error(`${this.config.name} stream error:`, error.message);
-      yield { type: 'error', error: error.message };
+      const msg = error?.response?.data?.error?.message
+        || error?.response?.data?.message
+        || error?.message
+        || String(error);
+      logger.error(`${this.config.name} stream error: ${msg}`);
+      yield { type: 'error', error: msg };
     }
   }
 

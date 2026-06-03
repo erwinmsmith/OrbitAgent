@@ -139,6 +139,10 @@ router.get('/pricing', asyncHandler(async (_req: Request, res: Response) => {
     modelId,
     inputPricePerM: p.input,
     outputPricePerM: p.output,
+    // Cache-hit tier is a discounted input rate (e.g. DeepSeek's prompt cache).
+    // Models without an explicit cacheHit tier fall back to the regular input
+    // rate, which is what we'll bill at when no cacheHit is reported.
+    cacheHitPricePerM: p.cacheHit ?? p.input,
     currency: 'USD',
   }));
 

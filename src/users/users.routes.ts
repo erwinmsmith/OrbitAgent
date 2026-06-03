@@ -39,11 +39,26 @@ interface TokenUsageRecord {
   createdAt: Date;
 }
 
-// All routes require authentication
-router.use(authMiddleware(true));
-
+// Service singletons (referenced by both public and authenticated routes).
 const userService = getUserService();
 const tokenService = getTokenService();
+
+// ─── Public routes (must come BEFORE the auth gate below) ────────────
+
+/**
+ * GET /users/tasks/feed
+ * Global feed of shared ritual tasks (for "回响之谷"). No auth required —
+ * this powers the unauthenticated landing experience.
+ */
+router.get('/tasks/feed', asyncHandler(async (req: Request, res: Response) => {
+  const page = req.query.page ? parseInt(req.query.page as string) : 1;
+  const limit = req.query.limit ? parseInt(req.query.limit as string) : 20;
+  const result = await userService.getSharedTasksFeed(page, limit);
+  res.json({ success: true, data: result });
+}));
+
+// All routes below require authentication
+router.use(authMiddleware(true));
 
 // ─── Profile ─────────────────────────────────────────────────────────
 
@@ -222,23 +237,6 @@ router.get('/tasks', asyncHandler(async (req: Request, res: Response) => {
   });
 
   res.json({
-    success: true,
-    data: result,
-  });
-}));
-
-/**
- * GET /users/tasks/feed
- * Global feed of shared tasks (for "回响之谷")
- */
-router.get('/tasks/feed', asyncHandler(async (req: Request, _res: Response) => {
-  const page = req.query.page ? parseInt(req.query.page as string) : 1;
-  const limit = req.query.limit ? parseInt(req.query.limit as string) : 20;
-
-  // Public feed — no auth required beyond the router middleware
-  const result = await userService.getSharedTasksFeed(page, limit);
-
-  _res.json({
     success: true,
     data: result,
   });

@@ -28,6 +28,23 @@ router.get('/', asyncHandler(async (req: Request, res: Response) => {
   });
 }));
 
+// Health check — MUST be declared before `/:id` or it gets swallowed as a model lookup.
+router.get('/health', asyncHandler(async (_req: Request, res: Response) => {
+  const llmManager = getLLMManager();
+  const status = await llmManager.healthCheck();
+  const providers = llmManager.getAvailableProviders();
+  const healthyCount = Object.values(status).filter(Boolean).length;
+  res.json({
+    success: true,
+    data: {
+      healthy: healthyCount > 0,
+      providers: providers.map(p => ({ id: p, healthy: status[p] ?? false })),
+      defaultProvider: llmManager.getDefaultProvider(),
+      defaultModel: llmManager.getDefaultModel(),
+    },
+  });
+}));
+
 // Get model details
 router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;

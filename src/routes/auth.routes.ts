@@ -10,8 +10,10 @@ import { logger } from '../utils/logger';
 const router = Router();
 
 // Validation schemas
+// Note: tlds:{allow:false} permits non-public TLDs like ".local" — needed
+// because seeded dev/admin accounts use admin@orbit.local / dev@test.local.
 const registerSchema = Joi.object({
-  email: Joi.string().email().optional(),
+  email: Joi.string().email({ tlds: { allow: false } }).optional(),
   phone: Joi.string().pattern(/^\+?[0-9]{7,15}$/).optional(),
   username: Joi.string().alphanum().min(3).max(30).required(),
   password: Joi.string().min(6).required(),
@@ -19,7 +21,7 @@ const registerSchema = Joi.object({
 }).or('email', 'phone'); // at least one identifier required
 
 const loginSchema = Joi.object({
-  email: Joi.string().email().optional(),
+  email: Joi.string().email({ tlds: { allow: false } }).optional(),
   phone: Joi.string().pattern(/^\+?[0-9]{7,15}$/).optional(),
   password: Joi.string().required(),
 }).or('email', 'phone'); // at least one identifier required

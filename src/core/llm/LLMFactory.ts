@@ -158,6 +158,7 @@ export class LLMManager {
         try {
           const adapter = new OpenAICompatibleAdapter({
             name: providerConfig.name,
+            provider: providerKey as LLMProvider,
             baseUrl: providerConfig.baseUrl,
             apiKey,
             timeout: 60000,
@@ -339,7 +340,7 @@ export class LLMManager {
     return allModels.some(m => m.id === modelId);
   }
 
-  private getProviderFromModel(modelId: string): string {
+  getProviderFromModel(modelId: string): string {
     // Check if it's a known model ID for a compatible provider
     for (const [providerKey, providerConfig] of Object.entries(COMPATIBLE_PROVIDERS)) {
       if (providerConfig.models.some(m => m.id === modelId)) {
