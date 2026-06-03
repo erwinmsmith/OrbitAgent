@@ -2,6 +2,31 @@ import axios, { AxiosInstance } from 'axios';
 import { ILLMAdapter, ChatOptions, ChatResponse, LLMMessage, StreamChunk, ToolDefinition, ModelInfo, LLMProvider } from '../types';
 import { logger } from '../../../utils/logger';
 
+/**
+ * Convert our neutral LLMMessage[] to OpenAI/DeepSeek chat-completions
+ * message format, including the assistant `tool_calls` field and the
+ * `tool` role. Used by every OpenAI-compatible adapter in the repo.
+ */
+function toOpenAIMessages(messages: LLMMessage[]): any[] {
+  return messages.map((msg) => {
+    if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
+      return {
+        role: 'assistant',
+        content: msg.content || null,
+        tool_calls: msg.toolCalls.map((tc) => ({
+          id: tc.id,
+          type: 'function',
+          function: { name: tc.name, arguments: JSON.stringify(tc.input ?? {}) },
+        })),
+      };
+    }
+    if (msg.role === 'tool') {
+      return { role: 'tool', tool_call_id: msg.toolCallId ?? '', content: msg.content };
+    }
+    return { role: msg.role, content: msg.content };
+  });
+}
+
 export interface OpenAICompatibleConfig {
   name: string;
   /** Provider key used for tagging responses + token usage records (e.g. 'siliconflow', 'kimi'). */
@@ -137,10 +162,7 @@ export class OpenAICompatibleAdapter implements ILLMAdapter {
   async *streamChat(messages: LLMMessage[], options?: ChatOptions): AsyncGenerator<StreamChunk> {
     const model = options?.model || this.defaultModelId;
 
-    const requestMessages = messages.map(msg => ({
-      role: msg.role,
-      content: msg.content,
-    }));
+    const requestMessages = toOpenAIMessages(messages);
 
     try {
       const response = await this.client.post('/chat/completions', {

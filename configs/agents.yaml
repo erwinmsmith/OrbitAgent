@@ -1,7 +1,42 @@
 agents:
+  # ─── default (alias for liuyao) ──────────────────────────────────
+  # The project's main agent is the 六爻 Divination specialist. We give
+  # it the `default` id so /chat without an agentId still routes to it
+  # — every conversation in OrbitAgent is a divination conversation by
+  # default. Callers that want a generic chat can still pass
+  # agentId=generic; the same agent is also reachable under id=liuyao.
   - id: default
-    name: Default Agent
-    description: Default conversation agent
+    name: 六爻 Divination Agent
+    description: 六爻 specialist. Reads a stored ChartResult, calls the deterministic engine, and produces a structured AnalysisReport with RAG citations. Never re-computes 排盘/装卦/纳甲/六亲 itself.
+    model: deepseek-v4-flash
+    provider: deepseek
+    temperature: 0.3
+    maxTokens: 8192
+    skills:
+      - context-enrichment
+      - intent-classification
+    tools:
+      - divination
+    systemPromptId: liuyao-agent
+
+  # Alias — same config as `default`, but reachable explicitly.
+  - id: liuyao
+    name: 六爻 Divination Agent
+    description: Alias for the default 六爻 agent. Kept for callers that prefer the explicit id.
+    model: deepseek-v4-flash
+    provider: deepseek
+    temperature: 0.3
+    maxTokens: 8192
+    skills:
+      - context-enrichment
+      - intent-classification
+    tools:
+      - divination
+    systemPromptId: liuyao-agent
+
+  - id: generic
+    name: Generic Assistant
+    description: Default conversation agent (no divination, no tools, no system-prompt override). Use this when you explicitly want a vanilla LLM call.
     model: deepseek-v4-flash
     provider: deepseek
     temperature: 0.7
@@ -23,17 +58,3 @@ agents:
     tools:
       - filesystem
       - search
-
-  - id: liuyao
-    name: 六爻 Divination Agent
-    description: Specialist in classical Liu Yao (六爻) I-Ching-style coin oracle. Calls the deterministic divination engine via the `divination` tool; never re-computes 排盘/装卦/纳甲/六亲 itself.
-    model: deepseek-v4-flash
-    provider: deepseek
-    temperature: 0.3
-    maxTokens: 8192
-    skills:
-      - context-enrichment
-      - intent-classification
-    tools:
-      - divination
-    systemPromptId: liuyao-agent

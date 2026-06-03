@@ -2,6 +2,31 @@ import axios, { AxiosInstance } from 'axios';
 import { ILLMAdapter, ChatOptions, ChatResponse, LLMMessage, StreamChunk, ToolDefinition, ModelInfo } from '../types';
 import { logger } from '../../../utils/logger';
 
+/**
+ * Convert our neutral LLMMessage[] to OpenAI/DeepSeek chat-completions
+ * message format, including the assistant `tool_calls` field and the
+ * `tool` role (used to return a tool's output back to the model).
+ */
+function toOpenAIMessages(messages: LLMMessage[]): any[] {
+  return messages.map((msg) => {
+    if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
+      return {
+        role: 'assistant',
+        content: msg.content || null,
+        tool_calls: msg.toolCalls.map((tc) => ({
+          id: tc.id,
+          type: 'function',
+          function: { name: tc.name, arguments: JSON.stringify(tc.input ?? {}) },
+        })),
+      };
+    }
+    if (msg.role === 'tool') {
+      return { role: 'tool', tool_call_id: msg.toolCallId ?? '', content: msg.content };
+    }
+    return { role: msg.role, content: msg.content };
+  });
+}
+
 export class DeepSeekAdapter implements ILLMAdapter {
   readonly name = 'DeepSeekAdapter';
   readonly provider: 'deepseek' = 'deepseek';
@@ -39,10 +64,7 @@ export class DeepSeekAdapter implements ILLMAdapter {
 
     const model = options?.model || 'deepseek-v4-flash';
 
-    const requestMessages = messages.map(msg => ({
-      role: msg.role,
-      content: msg.content,
-    }));
+    const requestMessages = toOpenAIMessages(messages);
 
     try {
       const response = await this.client!.post('/chat/completions', {
@@ -105,10 +127,7 @@ export class DeepSeekAdapter implements ILLMAdapter {
 
     const model = options?.model || 'deepseek-v4-flash';
 
-    const requestMessages = messages.map(msg => ({
-      role: msg.role,
-      content: msg.content,
-    }));
+    const requestMessages = toOpenAIMessages(messages);
 
     try {
       const response = await this.client!.post('/chat/completions', {

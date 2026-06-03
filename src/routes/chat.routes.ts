@@ -9,6 +9,8 @@ import { getToolManager } from '../core/tools/ToolManager';
 import { getTokenService } from '../services/TokenService';
 import { getAgent } from '../core/agents/AgentLoader';
 import { getPromptManager } from '../core/prompts/PromptManager';
+import { getChart } from '../core/memory/ChartStore';
+import DivinationTool from '../core/tools/builtins/DivinationTool';
 import { generateSessionId, generateMessageId, now } from '../utils/helpers';
 import { logger } from '../utils/logger';
 import { TempMessage, LLMMessage } from '../core/llm/types';
@@ -183,7 +185,42 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
     }
   }
 
-  // ─── Tool filtering (agent's allow-list) ───
+  // ─── Stored chart context ─────────────────────────────────────────
+  // If the user previously cast a chart on this session, inject a
+  // structured summary as a SECOND system message so the agent has the
+  //排盘 facts in front of it. The agent then calls the divination
+  // tool with action=analyze to get the full prose report.
+  const stored = await getChart(session);
+  if (stored) {
+    const lines = (stored.chart.lines || []) as any[];
+    const summary = [
+      '【已排盘（来自 server-side ChartStore）】',
+      stored.chart.question ? `用户问题：${stored.chart.question}` : null,
+      stored.chart.questionType ? `问题类型：${stored.chart.questionType}` : null,
+      `本卦：${stored.chart.originalHexagram?.name ?? '?'}（属${stored.chart.originalHexagram?.palace ?? '?'}宫，${stored.chart.originalHexagram?.element ?? '?'}）`,
+      `变卦：${stored.chart.changedHexagram?.name ?? '?'}`,
+      `动爻：${(stored.chart.movingLines || []).join('、') || '无'}`,
+      `世爻：第${lines.find((l) => l.isShi)?.position ?? '?'}爻 ${lines.find((l) => l.isShi)?.branch ?? ''}`,
+      `应爻：第${lines.find((l) => l.isYing)?.position ?? '?'}爻 ${lines.find((l) => l.isYing)?.branch ?? ''}`,
+      `六爻（六亲 + 六神）：`,
+      ...lines.map((l) =>
+        `  第${l.position}爻 ${l.branch}(${l.element}) ${l.sixRelative} 临${l.sixGod}` +
+        (l.moving ? ` 动→${l.changedYinYang}` : '') +
+        (l.isShi ? ' 【世】' : '') +
+        (l.isYing ? ' 【应】' : ''),
+      ),
+      stored.chart.yongshen?.candidates?.length
+        ? `用神候选：${stored.chart.yongshen.candidates.map((c) => `${c.relative}(${c.confidence})`).join('、')}`
+        : null,
+      (stored.chart.warnings?.length ?? 0) > 0
+        ? `排盘警告：${(stored.chart.warnings || []).join('；')}`
+        : null,
+    ].filter(Boolean).join('\n');
+    llmMessages.unshift({ role: 'system', content: summary });
+    logger.debug(`Injected stored chart for session=${session}`);
+  }
+
+  // ─── Tool filtering + per-call binding ──────────────────────────
   // If the agent declares a `tools: []` list, we narrow the tools the
   // LLM is allowed to invoke. The 六爻 agent only needs the `divination`
   // tool — filesystem/search should NOT be exposed to it.
@@ -194,18 +231,86 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
     tools = tools.filter((t: any) => allowed.has(t.name));
   }
 
-  // Call LLM
-  const t3 = Date.now();
-  const response = await llmManager.chat(llmMessages, {
+  // Bind the divination tool to this request's sessionId, so when the
+  // LLM calls `divination(action=analyze)` it implicitly reads from
+  // ChartStore[<session>]. We pull the underlying tool instance and set
+  // boundSessionId directly (the LLM never sees a sessionId field).
+  if (toolManager) {
+    const divTool = toolManager.getToolByName('divination');
+    if (divTool && typeof (divTool as any).setBoundSessionId === 'function') {
+      (divTool as any).setBoundSessionId(session);
+    }
+  }
+
+  // Call LLM (with tool-call loop). The agent may ask for any number of
+  // tool calls before producing the final user-facing answer. We cap the
+  // loop at MAX_TOOL_ITERATIONS to prevent runaway.
+  const MAX_TOOL_ITERATIONS = 5;
+  const toolCallLog: Array<{ name: string; ok: boolean; error?: string }> = [];
+  let response = await llmManager.chat(llmMessages, {
     model,
     tools: tools.length > 0 ? tools : undefined,
   });
-  logger.debug(`[Chat] LLM call done`, {
+
+  for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
+    const calls = response.toolCalls ?? [];
+    if (calls.length === 0) break;
+
+    // For each requested tool call: execute it, push the assistant turn
+    // and the tool result back into the messages, then re-chat.
+    for (const call of calls) {
+      const tool = toolManager?.getToolByName?.(call.name);
+      let resultText: string;
+      let ok = true;
+      let errorMsg: string | undefined;
+      if (!tool) {
+        ok = false;
+        errorMsg = `tool not found: ${call.name}`;
+        resultText = JSON.stringify({ error: errorMsg });
+      } else {
+        try {
+          const result = await tool.execute(call.input as any);
+          resultText = typeof result === 'string' ? result : JSON.stringify(result);
+        } catch (err: any) {
+          ok = false;
+          errorMsg = err?.message ?? String(err);
+          resultText = JSON.stringify({ error: errorMsg });
+        }
+      }
+      toolCallLog.push({ name: call.name, ok, error: errorMsg });
+
+      // Append the assistant's tool-call request to the conversation so
+      // the model sees its own choice on the next round.
+      llmMessages.push({
+        role: 'assistant',
+        content: response.content || '',
+        toolCalls: [call],
+      } as any);
+      // Append the tool result. Different LLM SDKs use different field
+      // names; our `LLMMessage` keeps it neutral as `toolCallId`+`name`+`content`.
+      llmMessages.push({
+        role: 'tool',
+        name: call.name,
+        toolCallId: call.id,
+        content: resultText,
+      } as any);
+    }
+
+    // Re-chat. Pass the same tool set so the model can keep iterating.
+    response = await llmManager.chat(llmMessages, {
+      model,
+      tools: tools.length > 0 ? tools : undefined,
+    });
+  }
+
+  const t3 = Date.now();
+  logger.debug(`[Chat] LLM call done (incl. tool loop)`, {
     durationMs: Date.now() - t3,
     model: response.model,
     provider: response.provider,
     responsePreview: response.content.substring(0, 50) + (response.content.length > 50 ? '...' : ''),
     usage: response.usage,
+    toolCalls: toolCallLog,
   });
 
   // Save assistant response to temporary memory

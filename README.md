@@ -492,6 +492,131 @@ curl -X DELETE $API/skills/install/<id> -H "$H"
 
 ---
 
+## 六爻 Agent (Default)
+
+The project ships with a **六爻 (Six Yang / Liu Yao / I-Ching coin oracle)
+specialist as the default agent**. Every `/chat` request without an
+`agentId` (and every `orbit chat` without `--agent`) routes to it.
+
+### Two-step flow
+
+The agent never recomputes 排盘/装卦/纳甲/六亲/六神 itself — all of
+that work is done by a deterministic engine (`src/liuyao/`). The
+**flow is intentionally split**:
+
+1. **User casts the chart once.** `orbit divination chart <bits> --session <id>`
+   runs the 13-skill pipeline, gets a `ChartResult`, and persists it
+   to the server-side `ChartStore` under the given sessionId (Redis,
+   24h TTL).
+2. **The agent reads the stored chart on demand.** When the user
+   then runs `orbit chat --session <id> "..."`, `/chat` injects the
+   chart summary into the LLM's system context, and the agent invokes
+   the `divination` tool (single action: `analyze`) to get the full
+   6/9-section report. The agent never sees raw bits and never
+   re-runs the casting pipeline.
+
+```
+User                          OrbitAgent
+  │                                │
+  │  orbit divination chart 0 1 1  │
+  │  0 1 1 --session sess_x       │
+  ├──────────────────────────────►│  POST /divination/chart
+  │                                │  → assembleChart(bits)
+  │                                │  → saveChart(sess_x, chart)
+  │  ✓ Chart assembled & stored    │
+  │◄──────────────────────────────│
+  │                                │
+  │  orbit chat --session sess_x   │
+  │  "用六爻分析这次求财"          │
+  ├──────────────────────────────►│  POST /chat
+  │                                │  → getAgent("liuyao")
+  │                                │  → render system prompt
+  │                                │  → inject chart summary
+  │                                │  → bind divination tool
+  │                                │  → LLM sees summary + tool
+  │                                │  → LLM calls divination(analyze)
+  │                                │  → tool reads ChartStore
+  │                                │  → runAnalysisAgent(chart)
+  │                                │  → re-chat with report
+  │  完整 6 段报告 + RAG 引用     │
+  │◄──────────────────────────────│
+```
+
+### The "liuyao" agent
+
+- **id:** `default` (alias: `liuyao`) — both ids resolve to the
+  same config so callers can pick whichever reads better.
+- **model:** `deepseek-v4-flash` (cache-friendly: the system prompt
+  + skill list is ~1280 tokens and 100% hits the prompt cache).
+- **tools:** `divination` only. The agent cannot invoke `filesystem`
+  or `search` — those are reserved for the `coding` agent.
+- **systemPromptId:** `liuyao-agent` →
+  [prompts/system/liuyao-agent.yaml](prompts/system/liuyao-agent.yaml).
+  Hard rules: no recomputation, cite RAG sources, no absolute
+  judgments ("一定成" / "必发财" are forbidden).
+- **Generic alternative:** `agentId: "generic"` (or the CLI's
+  `--agent generic`) routes to a vanilla chat agent with no
+  divination behavior — use this if you want the LLM call without
+  any of the 六爻 machinery.
+
+### CLI quickstart
+
+```bash
+# 1. Cast the chart. Save it under a session id of your choice.
+orbit divination chart 0 1 1 0 1 1 \
+  --session sess_demo \
+  --question "求财" \
+  --day-stem 甲 --day-branch 子
+# → ✓ Chart assembled and stored.
+#   sessionId: sess_demo
+#   Next: orbit chat --session sess_demo "帮我分析"
+
+# 2. Talk to the agent on the same session.
+orbit chat --session sess_demo "帮我分析这次求财的运势"
+
+# 3. The same chart is now bound to sess_demo for 24h.
+#    orbit chat "..."  on a *different* session has no chart context.
+```
+
+### CLI reference for divination
+
+```bash
+orbit divination cast 0 1 1 0 1 1              # bits → CastResult (no storage)
+orbit divination chart 0 1 1 0 1 1 --session X  # full chart + persist to store
+orbit divination analyze /tmp/chart.json       # stand-alone report from a file
+orbit divination analyze                       # reads last chart from current session
+orbit divination rag stats|search Q|rebuild
+```
+
+The `analyze` command and the `divination` tool both work in two
+modes: pass a `chart` object inline, OR pass a `sessionId` and the
+server reads the stored chart.
+
+### API surface
+
+```
+POST /api/v1/divination/cast        # 6 bits → CastResult (no storage)
+POST /api/v1/divination/chart       # {bits, sessionId, ...} → ChartResult + persist
+GET  /api/v1/divination/chart/keys/:sessionId  # list stored chart keys
+POST /api/v1/divination/analyze     # {chart} OR {sessionId} → AnalysisReport
+GET  /api/v1/divination/rag/stats   # RAG index stats
+POST /api/v1/divination/rag/search  # top-k chunks for a query
+POST /api/v1/divination/rag/rebuild # rebuild the RAG index
+
+POST /api/v1/chat                   # main chat; agentId defaults to "default" (= liuyao)
+```
+
+### What's still missing
+
+The deterministic engine needs hard-coded data tables that the user
+must source externally. See [docs/liuyao/KNOWLEDGE_NEEDED.md](docs/liuyao/KNOWLEDGE_NEEDED.md)
+for the per-section status. The highest-priority gap is the
+**64 hexagrams table** (P0) — until that is filled in, every chart
+returns warnings[] noting the empty table, and the agent will tell
+the user "本卦/变卦不可识别" rather than papering over the gap.
+
+---
+
 ## CLI (`orbit`)
 
 After `npm run build && npm link`, the `orbit` command is available on your PATH. The CLI is a **thin client over the existing backend REST API** — it does not re-implement any business logic, it just calls the same `/api/v1/*` endpoints the web UI / mobile app use.

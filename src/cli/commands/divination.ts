@@ -29,15 +29,18 @@ export function registerDivination(program: Command): void {
     });
 
   cmd.command('chart <bits...>')
-    .description('Run the full chart assembler. Optional --question / --question-type / --day-stem / --day-branch / --month-branch.')
+    .description('Run the full chart assembler AND persist it to the session store. --session is REQUIRED so the agent can read it back later.')
     .option('-q, --question <q>', 'Question text (used for 用神 + analysis)')
     .option('--question-type <t>', 'Override question type (e.g. 求财, 求事业)')
     .option('--day-stem <s>', '日干 (e.g. 甲) — needed for 六神 + 旬空')
     .option('--day-branch <b>', '日支 (e.g. 子) — needed for 旬空 + 冲合')
     .option('--month-branch <b>', '月支 (e.g. 寅) — needed for 月破 + 旺衰')
+    .option('-s, --session <id>', 'Session id under which to store the chart (auto-generated if omitted; pass the same value to `orbit chat` later)')
+    .option('--chart-key <k>', 'Logical name for this chart within the session (default: "default")', 'default')
     .action(async (bits: string[], opts) => {
       const arr = parseSixBits(bits);
-      const body: any = { bits: arr };
+      const sessionId = opts.session || `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const body: any = { bits: arr, sessionId, chartKey: opts.chartKey };
       if (opts.question) body.question = opts.question;
       if (opts.questionType) body.questionType = opts.questionType;
       if (opts.dayStem) body.dayStem = opts.dayStem;
@@ -51,7 +54,15 @@ export function registerDivination(program: Command): void {
           for (const w of data.warnings) console.log(chalk.yellow(`  - ${w}`));
           console.log();
         }
-        console.log(JSON.stringify(data, null, 2));
+        // Strip the ChartResult noise and just print the essentials.
+        console.log(chalk.green(`✓ Chart assembled and stored.`));
+        console.log(`  sessionId: ${chalk.cyan(sessionId)}`);
+        console.log(`  chartKey:   ${chalk.cyan(opts.chartKey)}`);
+        console.log(`  orig:       ${chalk.cyan(data.originalHexagram?.name ?? '?')}`);
+        console.log(`  moving:     ${chalk.cyan((data.movingLines || []).join(',') || 'none')}`);
+        console.log();
+        console.log(chalk.gray(`Next: orbit chat --session ${sessionId} "帮我分析"`));
+        console.log(chalk.gray(`Or:   orbit divination analyze <chart.json>  (for a stand-alone report)`));
       } catch (err: any) { console.error(chalk.red(`✗ ${err.message}`)); process.exit(1); }
     });
 

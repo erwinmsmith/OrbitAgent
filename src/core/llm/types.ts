@@ -5,9 +5,13 @@ export type LLMProvider = 'anthropic' | 'openai' | 'google' | 'ollama' | 'deepse
 
 // Message format
 export interface LLMMessage {
-  role: 'system' | 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
   name?: string;
+  /** Tool-call request emitted by the assistant (assistant turn only). */
+  toolCalls?: ToolCall[];
+  /** Matches the tool_calls[].id the response is replying to (tool turn). */
+  toolCallId?: string;
 }
 
 // Temporary message for Redis storage

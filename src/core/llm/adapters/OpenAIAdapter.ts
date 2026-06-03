@@ -36,11 +36,23 @@ export class OpenAIAdapter implements ILLMAdapter {
 
     const model = options?.model || 'gpt-4o';
 
-    const openaiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = messages.map(msg => ({
-      role: msg.role,
-      content: msg.content,
-      name: msg.name,
-    }));
+    const openaiMessages: any[] = messages.map(msg => {
+      if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
+        return {
+          role: 'assistant',
+          content: msg.content || null,
+          tool_calls: msg.toolCalls.map((tc: any) => ({
+            id: tc.id,
+            type: 'function',
+            function: { name: tc.name, arguments: JSON.stringify(tc.input ?? {}) },
+          })),
+        };
+      }
+      if (msg.role === 'tool') {
+        return { role: 'tool', tool_call_id: msg.toolCallId ?? '', content: msg.content };
+      }
+      return { role: msg.role, content: msg.content, name: msg.name };
+    });
 
     const params: OpenAI.Chat.ChatCompletionCreateParams = {
       model,
@@ -101,11 +113,23 @@ export class OpenAIAdapter implements ILLMAdapter {
 
     const model = options?.model || 'gpt-4o';
 
-    const openaiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = messages.map(msg => ({
-      role: msg.role,
-      content: msg.content,
-      name: msg.name,
-    }));
+    const openaiMessages: any[] = messages.map(msg => {
+      if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
+        return {
+          role: 'assistant',
+          content: msg.content || null,
+          tool_calls: msg.toolCalls.map((tc: any) => ({
+            id: tc.id,
+            type: 'function',
+            function: { name: tc.name, arguments: JSON.stringify(tc.input ?? {}) },
+          })),
+        };
+      }
+      if (msg.role === 'tool') {
+        return { role: 'tool', tool_call_id: msg.toolCallId ?? '', content: msg.content };
+      }
+      return { role: msg.role, content: msg.content, name: msg.name };
+    });
 
     const params: OpenAI.Chat.ChatCompletionCreateParams = {
       model,
