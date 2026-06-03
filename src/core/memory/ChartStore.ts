@@ -1,93 +1,155 @@
 /**
- * ChartStore — persists a single assembled ChartResult per session
- * in Redis, so that subsequent /chat calls (or the analyze tool) can
- * read it without re-running the assembly pipeline.
+ * ChartStore — persists a single assembled ChartResult per
+ * (userId, sessionId, chartKey) in MongoDB. Every operation takes
+ * a userId so a caller cannot load another user's chart by guessing
+ * a sessionId.
  *
- * Design (per the user's request):
- *   - User runs `orbit divination chart <bits>` once.
- *   - Server stores the ChartResult under
- *     `orbit:chart:<sessionId>` (TTL = 24h, matches TemporaryMemory).
- *   - Subsequent /chat on the same sessionId has the chart
- *     auto-injected into the agent's context, and the `divination`
- *     tool only exposes an `analyze` action that reads from the store.
+ * Why Mongo and not Redis:
+ *   Redis is the cache / pub-sub / ephemeral-state layer. Charts
+ *   are user-owned business data and must survive Redis restarts,
+ *   so they live in Mongo with a TTL index for automatic cleanup.
  *
- * Multi-chart-per-session is supported via the optional `chartKey`
- * field — if the user casts twice on the same session, the second
- * chart is stored under `orbit:chart:<sessionId>:<chartKey>`, and the
- * most-recent key for the session is tracked at
- * `orbit:chart:<sessionId>:latest`.
+ * Public API matches the previous Redis-backed version with one
+ * important change: every function now takes a userId argument and
+ * throws if a chart doesn't exist OR doesn't belong to that user.
+ * Routes that talk to ChartStore must be authenticated and pass
+ * req.user.userId.
  */
-import { getRedisClient } from '../../services/database';
-import { logger } from '../../utils/logger';
+import { DivinationChartModel } from '../../models/DivinationChart';
 import type { ChartResult } from '../../liuyao/types/chart';
+import { logger } from '../../utils/logger';
 
-const TTL_SECONDS = 24 * 60 * 60;
-const KEY_PREFIX = 'orbit:chart';
-
-function keyFor(sessionId: string, chartKey: string = 'default'): string {
-  return `${KEY_PREFIX}:${sessionId}:${chartKey}`;
-}
-
-function latestKeyFor(sessionId: string): string {
-  return `${KEY_PREFIX}:${sessionId}:latest`;
-}
-
-function sessionKeysSetKey(sessionId: string): string {
-  return `${KEY_PREFIX}:${sessionId}:keys`;
-}
+const DEFAULT_TTL_HOURS = 24;
 
 export interface StoredChart {
+  userId: string;
+  sessionId: string;
   chartKey: string;
   savedAt: string;
+  expiresAt: string;
   chart: ChartResult;
 }
 
+/**
+ * Save (or upsert) a chart for a user+session+key triple. Idempotent
+ * — calling it twice on the same triple just updates the chart in
+ * place. TTL defaults to 24h, configurable via the fourth arg.
+ */
 export async function saveChart(
+  userId: string,
   sessionId: string,
   chart: ChartResult,
   chartKey: string = 'default',
-): Promise<void> {
-  const redis = getRedisClient();
-  if (!redis) throw new Error('ChartStore: redis not initialized');
-  const key = keyFor(sessionId, chartKey);
-  const latest = latestKeyFor(sessionId);
-  const keys = sessionKeysSetKey(sessionId);
-  const payload: StoredChart = {
+  ttlHours: number = DEFAULT_TTL_HOURS,
+): Promise<StoredChart> {
+  if (!userId) throw new Error('ChartStore: userId is required (multi-user isolation)');
+  if (!sessionId) throw new Error('ChartStore: sessionId is required');
+
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + ttlHours * 60 * 60 * 1000);
+
+  const doc = await DivinationChartModel.findOneAndUpdate(
+    { userId, sessionId, chartKey },
+    {
+      $set: { chart, expiresAt },
+      $setOnInsert: { userId, sessionId, chartKey },
+    },
+    { new: true, upsert: true, setDefaultsOnInsert: true },
+  );
+
+  logger.info(`ChartStore: saved chart userId=${userId} sessionId=${sessionId} key=${chartKey}`);
+  return {
+    userId,
+    sessionId,
     chartKey,
-    savedAt: new Date().toISOString(),
-    chart,
+    savedAt: now.toISOString(),
+    expiresAt: expiresAt.toISOString(),
+    chart: doc.chart as ChartResult,
   };
-  await redis.set(key, JSON.stringify(payload), 'EX', TTL_SECONDS);
-  await redis.set(latest, chartKey, 'EX', TTL_SECONDS);
-  await redis.sadd(keys, chartKey);
-  await redis.expire(keys, TTL_SECONDS);
-  logger.info(`ChartStore: saved chart for session=${sessionId} key=${chartKey}`);
 }
 
+/**
+ * Fetch a stored chart. Throws if the chart doesn't exist OR
+ * doesn't belong to userId — we deliberately don't return null
+ * silently because that lets a caller probe other users' sessionIds
+ * for existence.
+ */
 export async function getChart(
+  userId: string,
   sessionId: string,
-  chartKey?: string,
-): Promise<StoredChart | null> {
-  const redis = getRedisClient();
-  if (!redis) return null;
-  // If no key supplied, use the latest.
-  let key = chartKey;
-  if (!key) {
-    key = (await redis.get(latestKeyFor(sessionId))) ?? 'default';
+  chartKey: string = 'default',
+): Promise<StoredChart> {
+  if (!userId) throw new Error('ChartStore: userId is required');
+  if (!sessionId) throw new Error('ChartStore: sessionId is required');
+
+  const doc = await DivinationChartModel.findOne({ userId, sessionId, chartKey }).lean();
+  if (!doc) {
+    // Same message whether the chart doesn't exist or doesn't belong
+    // to this user. Don't leak that distinction.
+    throw new Error(
+      `No stored chart for sessionId=${sessionId}` +
+      (chartKey !== 'default' ? ` chartKey=${chartKey}` : '') +
+      '. Run `orbit divination chart <bits> --session <id>` first.',
+    );
   }
-  const raw = await redis.get(keyFor(sessionId, key));
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as StoredChart;
-  } catch (err) {
-    logger.warn(`ChartStore: failed to parse stored chart for ${sessionId}/${key}: ${err}`);
-    return null;
-  }
+  return {
+    userId: doc.userId,
+    sessionId: doc.sessionId,
+    chartKey: doc.chartKey,
+    savedAt: (doc as any).createdAt?.toISOString?.() ?? new Date().toISOString(),
+    expiresAt: doc.expiresAt.toISOString(),
+    chart: doc.chart as ChartResult,
+  };
 }
 
-export async function listChartKeys(sessionId: string): Promise<string[]> {
-  const redis = getRedisClient();
-  if (!redis) return [];
-  const keys = await redis.smembers(sessionKeysSetKey(sessionId));
-  return (keys as string[]).sort();
+/** Return the latest chart on a session (any chartKey), or null. */
+export async function getLatestChart(
+  userId: string,
+  sessionId: string,
+): Promise<StoredChart | null> {
+  if (!userId || !sessionId) return null;
+  const doc = await DivinationChartModel
+    .findOne({ userId, sessionId })
+    .sort({ createdAt: -1 })
+    .lean();
+  if (!doc) return null;
+  return {
+    userId: doc.userId,
+    sessionId: doc.sessionId,
+    chartKey: doc.chartKey,
+    savedAt: (doc as any).createdAt?.toISOString?.() ?? new Date().toISOString(),
+    expiresAt: doc.expiresAt.toISOString(),
+    chart: doc.chart as ChartResult,
+  };
+}
+
+export async function listChartKeys(
+  userId: string,
+  sessionId: string,
+): Promise<string[]> {
+  if (!userId || !sessionId) return [];
+  const docs = await DivinationChartModel
+    .find({ userId, sessionId })
+    .select('chartKey')
+    .lean();
+  return docs.map((d) => d.chartKey).sort();
+}
+
+/** List all charts the user owns on a session. Admin/debug helper. */
+export async function listUserChartsOnSession(
+  userId: string,
+  sessionId: string,
+): Promise<StoredChart[]> {
+  const docs = await DivinationChartModel
+    .find({ userId, sessionId })
+    .sort({ createdAt: -1 })
+    .lean();
+  return docs.map((doc: any) => ({
+    userId: doc.userId,
+    sessionId: doc.sessionId,
+    chartKey: doc.chartKey,
+    savedAt: doc.createdAt?.toISOString?.() ?? new Date().toISOString(),
+    expiresAt: doc.expiresAt.toISOString(),
+    chart: doc.chart as ChartResult,
+  }));
 }

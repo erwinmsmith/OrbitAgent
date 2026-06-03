@@ -189,8 +189,10 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
   // If the user previously cast a chart on this session, inject a
   // structured summary as a SECOND system message so the agent has the
   //排盘 facts in front of it. The agent then calls the divination
-  // tool with action=analyze to get the full prose report.
-  const stored = await getChart(session);
+  // tool with action=analyze to get the full prose report. We pass
+  // the caller's userId so a user can never load another user's chart
+  // by guessing a sessionId.
+  const stored = await getChart(userId, session).catch(() => null);
   if (stored) {
     const lines = (stored.chart.lines || []) as any[];
     const summary = [
@@ -231,14 +233,20 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
     tools = tools.filter((t: any) => allowed.has(t.name));
   }
 
-  // Bind the divination tool to this request's sessionId, so when the
-  // LLM calls `divination(action=analyze)` it implicitly reads from
-  // ChartStore[<session>]. We pull the underlying tool instance and set
-  // boundSessionId directly (the LLM never sees a sessionId field).
+  // Bind the divination tool to this request's (userId, sessionId), so
+  // when the LLM calls `divination(action=analyze)` it implicitly reads
+  // from ChartStore[<userId, sessionId>]. We pull the underlying tool
+  // instance and set the bound state directly (the LLM never sees a
+  // userId or sessionId field in the tool schema).
   if (toolManager) {
     const divTool = toolManager.getToolByName('divination');
-    if (divTool && typeof (divTool as any).setBoundSessionId === 'function') {
-      (divTool as any).setBoundSessionId(session);
+    if (divTool) {
+      if (typeof (divTool as any).setBoundSession === 'function') {
+        (divTool as any).setBoundSession(session, userId, !!req.user?.isAdmin);
+      } else if (typeof (divTool as any).setBoundSessionId === 'function') {
+        // Back-compat: older DivinationTool build that only knows sessionId.
+        (divTool as any).setBoundSessionId(session);
+      }
     }
   }
 

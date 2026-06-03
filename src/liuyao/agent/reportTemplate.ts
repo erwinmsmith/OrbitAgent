@@ -107,8 +107,17 @@ function buildUnderstanding(chart: ChartResult, question?: string): QuestionUnde
   };
 }
 
-/** Assemble the full MVP 6-section report. */
-export async function buildReport(chart: ChartResult): Promise<AnalysisReport> {
+/** Assemble the full MVP 6-section report.
+ *
+ * `requesterId` + `isAdmin` scope the RAG search so the report only
+ * cites chunks the caller is allowed to see (system-scope + the
+ * caller's own user-scope uploads). Admin sees everything.
+ */
+export async function buildReport(
+  chart: ChartResult,
+  requesterId: string,
+  isAdmin: boolean = false,
+): Promise<AnalysisReport> {
   const question = chart.question ?? '';
   const understanding = buildUnderstanding(chart, question);
 
@@ -119,10 +128,10 @@ export async function buildReport(chart: ChartResult): Promise<AnalysisReport> {
     chart.changedHexagram?.name ?? '',
     (chart.yongshen?.candidates ?? []).map((c) => c.relative).join(' '),
   ].filter(Boolean).join(' ');
-  let top = await search(citationQuery, 4).catch(() => []);
+  let top = await search(citationQuery, 4, requesterId, isAdmin).catch(() => []);
   if (top.length === 0) {
     // Fallback: pull a few generic chunks so the agent has something to cite.
-    top = await search(chart.originalHexagram.name, 4).catch(() => []);
+    top = await search(chart.originalHexagram.name, 4, requesterId, isAdmin).catch(() => []);
   }
   const citations: RagCitation[] = top.map(({ chunk, score }) => ({
     source: `${chunk.source} (${chunk.title})`,

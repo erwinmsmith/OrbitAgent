@@ -25,6 +25,6 @@ export { runAnalysisAgent, AGENT_SYSTEM_PROMPT } from './agent/analysisAgent';
 export { buildReport } from './agent/reportTemplate';
 export { detectQuestionType, missingContextFor } from './agent/questionClassifier';
 export {
-  buildIndex, getIndex, search, ragStats,
+  search, ragStats, ingestDocument, deleteDocument, bootstrapSystemKnowledge,
   type RagChunk, type RagStats, hashEmbedder, cosineSimilarity,
 } from './rag/index';

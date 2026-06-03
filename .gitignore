@@ -42,3 +42,6 @@ dump.rdb
 
 # OS files
 Thumbs.db
+
+# Agent
+CLAUDE.md

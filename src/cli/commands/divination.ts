@@ -8,11 +8,14 @@
  *   analyze <chart.json>       — run the analysis agent on a chart
  *   rag stats | search Q       — query the RAG index
  *   rag rebuild                — rebuild the RAG index
+ *   rag upload <file.md>       — ingest a markdown file (user-scope; --system for admin)
+ *   rag list                   — list docs you can see
+ *   rag delete <source>        — delete a doc you own (or any, if admin)
  */
 import { Command } from 'commander';
 import fs from 'fs';
 import chalk from 'chalk';
-import { apiPost, apiGet } from '../http';
+import { apiPost, apiGet, apiDelete } from '../http';
 
 export function registerDivination(program: Command): void {
   const cmd = new Command('divination')
@@ -149,6 +152,54 @@ export function registerDivination(program: Command): void {
     .action(async () => {
       const r = await apiPost<any>('/divination/rag/rebuild');
       console.log(chalk.green(`✓ rebuilt: ${r.chunkCount} chunks from ${r.sourceCount} sources`));
+    });
+
+  rag.command('upload <file>')
+    .description('Ingest a markdown file into the RAG index. Defaults to user-scope (private to you). Pass --system as admin to add to the system knowledge base.')
+    .option('--system', 'Admin only: ingest as system-scope (visible to all users)', false)
+    .action(async (file: string, opts) => {
+      let body: string;
+      try {
+        body = fs.readFileSync(file, 'utf-8');
+      } catch (err: any) {
+        console.error(chalk.red(`✗ cannot read ${file}: ${err.message}`));
+        process.exit(1);
+      }
+      const filename = file.split('/').pop() || 'upload.md';
+      if (!filename.endsWith('.md')) {
+        console.error(chalk.red(`✗ filename must end in .md (got ${filename})`));
+        process.exit(2);
+      }
+      const scope = opts.system ? 'system' : 'user';
+      const r = await apiPost<any>('/divination/rag/upload', {
+        filename, body, scope,
+      });
+      console.log(chalk.green(`✓ ingested ${r.chunkCount} chunks from ${r.source} (scope=${r.scope})`));
+    });
+
+  rag.command('list')
+    .description('List documents in the RAG index that you can see (system + your user-scope uploads).')
+    .action(async () => {
+      const data = await apiGet<any>('/divination/rag/list');
+      const { chunkCount, sourceCount, sources, byScope } = data;
+      console.log(`chunks: ${chalk.cyan(chunkCount)}   sources: ${chalk.cyan(sourceCount)}`);
+      if (byScope) {
+        console.log(`  system: ${byScope.system ?? 0}    user: ${byScope.user ?? 0}`);
+      }
+      console.log();
+      for (const s of sources) console.log(`  - ${s}`);
+    });
+
+  rag.command('delete <source>')
+    .description('Delete a document from the RAG index. You can delete your own user-scope uploads; admins can delete any source.')
+    .action(async (source: string) => {
+      try {
+        await apiDelete(`/divination/rag/${encodeURIComponent(source)}`);
+        console.log(chalk.green(`✓ deleted ${source}`));
+      } catch (err: any) {
+        console.error(chalk.red(`✗ ${err.message}`));
+        process.exit(1);
+      }
     });
 
   cmd.addCommand(rag);

@@ -1,19 +1,22 @@
 /**
  * `divination` tool — the only callable tool the 六爻 agent needs.
  *
- * New design (per the user's flow change):
- *   - The user runs `orbit divination chart <bits>` first. The chart
- *     is persisted to ChartStore under the sessionId.
- *   - The agent is then invoked on that session. It sees the chart's
- *     summary injected as system context, and it calls THIS tool with
- *     `action: "analyze"` to get the full 6/9-section report.
- *   - There is no `cast` or `chart` action in the tool schema — those
+ * Flow:
+ *   - The user runs `orbit divination chart <bits> --session <id>` once.
+ *     The chart is persisted to ChartStore (Mongo) under
+ *     (userId, sessionId, chartKey).
+ *   - The agent is then invoked on that session. /chat injects a chart
+ *     summary as a system message, and binds (userId, sessionId) to
+ *     this tool. The LLM calls this tool with action=analyze and
+ *     gets back the full 6/9-section report — without ever seeing
+ *     the raw bits or having to decide a sessionId.
+ *   - There is no `cast` or `chart` action in the tool schema. Those
  *     are CLI concerns, not agent concerns. The agent reads the
  *     already-stored chart.
  *
- * The tool receives the `sessionId` via a `boundSessionId` field set
- * by /chat before the tool is called (we attach it in chat.routes).
- * This avoids the LLM having to know sessionId in its tool call.
+ * Per-user isolation: the tool's read is scoped by boundUserId, so
+ * the LLM (or a malicious /chat caller) cannot probe other users'
+ * stored charts by guessing a sessionId.
  */
 import { ToolDefinition, ToolParams } from '../types';
 import { getChart } from '../../../core/memory/ChartStore';
@@ -23,7 +26,7 @@ export default class DivinationTool {
   readonly id = 'divination';
   readonly name = 'divination';
   readonly description =
-    '六爻 analysis step. ONLY one action: `analyze`. ' +
+    '六爻 analysis step. ONE action: `analyze`. ' +
     'Reads the chart the user previously cast (via `orbit divination chart`) ' +
     'from the server-side ChartStore and returns a structured 6-section ' +
     'AnalysisReport with RAG citations. ' +
@@ -46,30 +49,37 @@ export default class DivinationTool {
   };
 
   /**
-   * Bound sessionId — set by /chat before each tool call. This is the
-   * session whose stored chart we read. We don't expose it in the
-   * tool's inputSchema so the LLM never has to think about sessions.
+   * Bound (userId, sessionId, isAdmin) — set by /chat before each
+   * tool call. The userId scopes both the chart read AND the RAG
+   * citations in the rendered report; the sessionId selects the
+   * chart; isAdmin widens the RAG visibility for admin users.
+   * None of these are exposed in the tool's inputSchema so the LLM
+   * never has to think about any of them.
    */
   private boundSessionId: string | null = null;
+  private boundUserId: string | null = null;
+  private boundIsAdmin: boolean = false;
 
-  setBoundSessionId(sessionId: string): void { this.boundSessionId = sessionId; }
+  setBoundSession(sessionId: string, userId: string, isAdmin: boolean = false): void {
+    this.boundSessionId = sessionId;
+    this.boundUserId = userId;
+    this.boundIsAdmin = isAdmin;
+  }
+  /** Back-compat shim — older call sites only set sessionId. */
+  setBoundSessionId(sessionId: string): void {
+    this.boundSessionId = sessionId;
+  }
   getBoundSessionId(): string | null { return this.boundSessionId; }
 
   async execute(params: ToolParams): Promise<any> {
     if (params.action !== 'analyze') {
       throw new Error(`divination tool only supports action=analyze, got: ${params.action}`);
     }
-    if (!this.boundSessionId) {
-      throw new Error('divination tool: no sessionId bound. /chat must set it before each call.');
+    if (!this.boundSessionId || !this.boundUserId) {
+      throw new Error('divination tool: no (userId, sessionId) bound. /chat must set it before each call.');
     }
-    const stored = await getChart(this.boundSessionId);
-    if (!stored) {
-      throw new Error(
-        `No stored chart for sessionId=${this.boundSessionId}. ` +
-        'The user must run `orbit divination chart <bits> --session <id>` first.',
-      );
-    }
-    return runAnalysisAgent(stored.chart);
+    const stored = await getChart(this.boundUserId, this.boundSessionId);
+    return runAnalysisAgent(stored.chart, this.boundUserId, this.boundIsAdmin);
   }
 
   protected async run(params: ToolParams): Promise<any> {

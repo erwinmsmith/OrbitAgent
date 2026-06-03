@@ -25,7 +25,15 @@ export const AGENT_SYSTEM_PROMPT = `
 如果 ChartResult 缺少关键信息，你必须说明缺失项，而不是自行补全。
 `;
 
-/** Run the agent on a structured chart and return an analysis report. */
-export async function runAnalysisAgent(chart: ChartResult): Promise<AnalysisReport> {
-  return buildReport(chart);
+/** Run the agent on a structured chart and return an analysis report.
+ *
+ * `requesterId` / `isAdmin` are forwarded to `buildReport` so the RAG
+ * citations only include chunks the caller can see.
+ */
+export async function runAnalysisAgent(
+  chart: ChartResult,
+  requesterId: string,
+  isAdmin: boolean = false,
+): Promise<AnalysisReport> {
+  return buildReport(chart, requesterId, isAdmin);
 }
