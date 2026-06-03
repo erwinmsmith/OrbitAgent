@@ -21,6 +21,7 @@ export function registerChat(program: Command): void {
     .option('-s, --session <id>', 'Session id for multi-turn; auto-generated if omitted')
     .option('--stream', 'Stream tokens via Server-Sent Events (POST /chat/stream)')
     .option('--system <text>', 'Prepend a system message (note: not all models honor it)')
+    .option('--agent <id>', 'Agent id from configs/agents.yaml (e.g. `default`, `coding`, `liuyao`)')
     .action(async (messageParts: string[], opts) => {
       const message = messageParts.length ? messageParts.join(' ') : await readStdin();
       if (!message.trim()) {
@@ -37,6 +38,7 @@ export function registerChat(program: Command): void {
       const provider = opts.provider || getDefaultProvider();
       const body: any = { sessionId: session, message, model, provider };
       if (opts.system) body.systemPrompt = opts.system;
+      if (opts.agent) body.agentId = opts.agent;
 
       if (opts.stream) {
         await runStream(body, session);

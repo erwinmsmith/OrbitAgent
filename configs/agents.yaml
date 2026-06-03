@@ -2,8 +2,8 @@ agents:
   - id: default
     name: Default Agent
     description: Default conversation agent
-    model: claude-3-5-sonnet-20241022
-    provider: anthropic
+    model: deepseek-v4-flash
+    provider: deepseek
     temperature: 0.7
     maxTokens: 4096
     skills:
@@ -23,3 +23,17 @@ agents:
     tools:
       - filesystem
       - search
+
+  - id: liuyao
+    name: 六爻 Divination Agent
+    description: Specialist in classical Liu Yao (六爻) I-Ching-style coin oracle. Calls the deterministic divination engine via the `divination` tool; never re-computes 排盘/装卦/纳甲/六亲 itself.
+    model: deepseek-v4-flash
+    provider: deepseek
+    temperature: 0.3
+    maxTokens: 8192
+    skills:
+      - context-enrichment
+      - intent-classification
+    tools:
+      - divination
+    systemPromptId: liuyao-agent

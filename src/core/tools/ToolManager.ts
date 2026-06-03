@@ -2,6 +2,7 @@ import { ITool, ToolDefinition, ToolParams, ToolResult, ToolRegistration, MCPSer
 import { BaseTool } from './types';
 import FilesystemTool from './builtins/FilesystemTool';
 import SearchTool from './builtins/SearchTool';
+import DivinationTool from './builtins/DivinationTool';
 import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
@@ -16,6 +17,7 @@ import axios from 'axios';
 const BUILTIN_TOOL_CTORS: Array<new () => ITool> = [
   FilesystemTool,
   SearchTool,
+  DivinationTool,
 ];
 
 // Local MCP Client implementation

@@ -7,6 +7,8 @@ import { getLLMManager } from '../core/llm/LLMFactory';
 import { getSkillManager } from '../core/skills/SkillManager';
 import { getToolManager } from '../core/tools/ToolManager';
 import { getTokenService } from '../services/TokenService';
+import { getAgent } from '../core/agents/AgentLoader';
+import { getPromptManager } from '../core/prompts/PromptManager';
 import { generateSessionId, generateMessageId, now } from '../utils/helpers';
 import { logger } from '../utils/logger';
 import { TempMessage, LLMMessage } from '../core/llm/types';
@@ -61,7 +63,8 @@ function sendSSEError(res: Response, errorCode: string, errorMessage: string, se
 // POST /chat - Send message (non-streaming)
 // ============================================================
 router.post('/', asyncHandler(async (req: Request, res: Response) => {
-  const { sessionId, message, model, provider, agentId } = req.body;
+  const { sessionId, message, agentId } = req.body;
+  let { model, provider } = req.body;
   const userId = req.user?.userId || req.apiKey?.userId;
 
   if (!userId) {
@@ -79,6 +82,13 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
       error: { code: 'INVALID_MESSAGE', message: 'Message is required and cannot be empty' },
     });
   }
+
+  // Resolve agent config (agents.yaml). Falling back to defaults for any
+  // field the caller left blank so the request still works if the agent
+  // is only partially specified.
+  const agent = getAgent(agentId);
+  if (!model && agent?.model) model = agent.model;
+  if (!provider && agent?.provider) provider = agent.provider;
 
   const session = sessionId || generateSessionId();
   const messageId = generateMessageId();
@@ -157,9 +167,32 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
     }
   }
 
-  // Get available tools
+  // ─── Agent-specific system prompt (prompts/system/<id>.yaml) ───
+  // When the request names an agent that has a systemPromptId, render
+  // that prompt and inject it as the first system message. This is what
+  // turns a generic LLM call into a 六爻 specialist.
+  if (agent?.systemPromptId) {
+    const promptMgr = getPromptManager();
+    const rendered = promptMgr.render(agent.systemPromptId, {
+      agent_name: agent.name,
+    }, 'system');
+    if (rendered) {
+      llmMessages.unshift({ role: 'system', content: rendered });
+    } else {
+      logger.warn(`Agent ${agent.id} references missing systemPromptId=${agent.systemPromptId}`);
+    }
+  }
+
+  // ─── Tool filtering (agent's allow-list) ───
+  // If the agent declares a `tools: []` list, we narrow the tools the
+  // LLM is allowed to invoke. The 六爻 agent only needs the `divination`
+  // tool — filesystem/search should NOT be exposed to it.
   const toolManager = getToolManager();
-  const tools = toolManager?.listTools() || [];
+  let tools: any[] = toolManager?.listTools() || [];
+  if (agent?.tools && agent.tools.length > 0) {
+    const allowed = new Set(agent.tools);
+    tools = tools.filter((t: any) => allowed.has(t.name));
+  }
 
   // Call LLM
   const t3 = Date.now();
