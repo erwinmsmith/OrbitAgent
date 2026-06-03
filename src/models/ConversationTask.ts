@@ -89,12 +89,14 @@ const ConversationTaskSchema = new Schema<IConversationTask>(
     userId: {
       type: String,
       required: true,
-      index: true,
+      // Indexed via compound { userId: 1, createdAt: -1 } below.
     },
     sessionId: {
       type: String,
       required: true,
-      index: true,
+      // sessionId is a queryable foreign key but not on a hot path; rely on
+      // the existing compound { userId, sessionId, userId } uniqueness rather
+      // than a separate single-field index.
     },
     ritualQuestion: {
       type: String,
@@ -139,7 +141,7 @@ const ConversationTaskSchema = new Schema<IConversationTask>(
     isArchived: {
       type: Boolean,
       default: false,
-      index: true,
+      // Covered by the compound { userId, isArchived, createdAt } index below.
     },
     isShared: {
       type: Boolean,
@@ -160,10 +162,9 @@ const ConversationTaskSchema = new Schema<IConversationTask>(
   }
 );
 
-// Compound indexes
+// Compound / sort indexes (single-field indexes are inline on the schema).
 ConversationTaskSchema.index({ userId: 1, createdAt: -1 });
 ConversationTaskSchema.index({ userId: 1, isArchived: 1, createdAt: -1 });
-ConversationTaskSchema.index({ sessionId: 1 });
 ConversationTaskSchema.index({ likedCount: -1 });
 ConversationTaskSchema.index({ sharedCount: -1 });
 

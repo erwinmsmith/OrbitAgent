@@ -90,7 +90,8 @@ const UserProfileSchema = new Schema<IUserProfile>(
 );
 
 // Compound indexes
-UserProfileSchema.index({ userId: 1 }, { unique: true });
+// `userId` already has `unique: true, index: true` on the schema above — no
+// need to re-declare. Add other compound / sort indexes here as needed.
 UserProfileSchema.index({ totalRituals: -1 });
 UserProfileSchema.index({ checkInStreak: -1 });
 

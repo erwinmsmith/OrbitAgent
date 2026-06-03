@@ -19,12 +19,12 @@ const ConversationSchema = new Schema<IConversation>(
     userId: {
       type: String,
       required: true,
-      index: true,
+      // Indexed via the { userId: 1, createdAt: -1 } compound below.
     },
     sessionId: {
       type: String,
       required: true,
-      index: true,
+      // Uniqueness enforced via the compound { sessionId, userId } index below.
     },
     agentId: {
       type: String,
@@ -60,10 +60,14 @@ const ConversationSchema = new Schema<IConversation>(
   }
 );
 
-// Compound indexes
+// Compound indexes (single-field indexes are declared inline on the schema
+// via `index: true` — do not re-declare them here or Mongoose warns about
+// duplicate indexes).
 ConversationSchema.index({ userId: 1, createdAt: -1 });
 ConversationSchema.index({ userId: 1, agentId: 1, createdAt: -1 });
-ConversationSchema.index({ sessionId: 1 }, { unique: true });
+// `sessionId` already has a non-unique single-field index above; we add a
+// separate unique compound so lookups by session AND user stay O(1).
+ConversationSchema.index({ sessionId: 1, userId: 1 }, { unique: true });
 
 export interface IMessage extends Document {
   conversationId: mongoose.Types.ObjectId;

@@ -112,6 +112,12 @@ class Application {
     // Initialize LLM Manager
     await initializeLLM();
 
+    // Fail-fast guard: if the configured default provider didn't initialize
+    // (typically missing API key), fall back to any provider that did so chat
+    // calls don't 500 with "No adapter available for provider: X". The
+    // previous behaviour was to silently boot with a broken default.
+    this.ensureDefaultProviderAvailable();
+
     // Initialize Memory
     const tempMemory = getTemporaryMemory();
     await tempMemory.startCleanup();
@@ -129,6 +135,28 @@ class Application {
     await initializePromptManager();
 
     logger.info('All services initialized');
+  }
+
+  private ensureDefaultProviderAvailable(): void {
+    const llm = getLLMManager();
+    const wanted = llm.getDefaultProvider();
+    const available = llm.getAvailableProviders();
+
+    if (available.length === 0) {
+      logger.warn('No LLM providers initialized — chat endpoints will fail until an API key is configured.');
+      return;
+    }
+
+    if (!llm.isProviderAvailable(wanted)) {
+      const fallback = available[0];
+      logger.warn(
+        `Configured defaultProvider="${wanted}" is not initialized (missing API key?). ` +
+        `Falling back to "${fallback}". Set llm.defaultProvider in config.yaml to silence this warning.`
+      );
+      llm.setDefaultProvider(fallback).catch(err =>
+        logger.error('Failed to set fallback default provider:', err)
+      );
+    }
   }
 
   async start(): Promise<void> {
@@ -338,6 +366,11 @@ async function main() {
   }
 }
 
-main();
+// Only auto-start when invoked as the entrypoint (npm run dev / node dist/app.js).
+// Imported (e.g. by tests/supertest) the app instance is exported for the caller
+// to drive directly without booting the listener.
+if (require.main === module) {
+  main();
+}
 
 export default app;
