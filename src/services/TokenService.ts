@@ -8,6 +8,10 @@ export interface TokenUsageRecord {
   modelId: string;
   modelProvider: string;
   promptTokens: number;
+  /** Optional. Prompt tokens served from the provider cache (e.g. DeepSeek).
+   *  Cost is computed at the discounted cacheHit rate; the remaining
+   *  (promptTokens - cacheHitTokens) is charged at the regular input rate. */
+  cacheHitTokens?: number;
   completionTokens: number;
   totalTokens: number;
   endpoint: string;
@@ -21,7 +25,13 @@ class TokenService {
    */
   async recordUsage(record: TokenUsageRecord): Promise<ITokenUsage> {
     try {
-      const costs = calculateCost(record.modelId, record.promptTokens, record.completionTokens);
+      const cacheHit = Math.max(0, record.cacheHitTokens ?? 0);
+      const costs = calculateCost(
+        record.modelId,
+        record.promptTokens,
+        record.completionTokens,
+        cacheHit,
+      );
       const pricing = getModelPricing(record.modelId, record.modelProvider);
 
       const usage = new TokenUsageModel({
@@ -31,6 +41,7 @@ class TokenService {
         modelId: record.modelId,
         modelProvider: record.modelProvider,
         promptTokens: record.promptTokens,
+        cacheHitTokens: cacheHit,
         completionTokens: record.completionTokens,
         totalTokens: record.totalTokens,
         promptCost: costs.promptCost,
@@ -41,6 +52,7 @@ class TokenService {
         responseTimeMs: record.responseTimeMs,
         inputPricePerM: pricing.input,
         outputPricePerM: pricing.output,
+        cacheHitPricePerM: pricing.cacheHit,
       });
 
       await usage.save();

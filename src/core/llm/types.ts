@@ -60,6 +60,10 @@ export interface ChatResponse {
     inputTokens: number;
     outputTokens: number;
     totalTokens: number;
+    /** Subset of `inputTokens` served from the provider's prompt cache
+     *  (e.g. DeepSeek's `prompt_tokens_details.cached_tokens`). Defaults to 0
+     *  when the provider doesn't break the count down. */
+    cacheHitTokens?: number;
   };
   toolCalls?: ToolCall[];
   raw?: any;
@@ -83,6 +87,7 @@ export interface StreamChunk {
     inputTokens: number;
     outputTokens: number;
     totalTokens: number;
+    cacheHitTokens?: number;
   };
 }
 

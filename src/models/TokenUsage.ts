@@ -7,6 +7,9 @@ export interface ITokenUsage extends Document {
   modelId: string;
   modelProvider: string;
   promptTokens: number;
+  /** Prompt tokens served from provider cache (e.g. DeepSeek prompt cache).
+   *  Charged at a discounted rate; defaults to 0 for providers without caching. */
+  cacheHitTokens: number;
   completionTokens: number;
   totalTokens: number;
   promptCost: number;
@@ -17,6 +20,7 @@ export interface ITokenUsage extends Document {
   responseTimeMs: number;
   inputPricePerM: number;
   outputPricePerM: number;
+  cacheHitPricePerM: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -28,8 +32,11 @@ export interface ITokenUsageModel extends Model<ITokenUsage> {
   getDailyStats(userId: string, days?: number): Promise<any>;
 }
 
-// Pricing per million tokens (USD) - as of 2026
-export const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+// Pricing per million tokens (USD) - as of 2026.
+// `cacheHit` is the discounted rate for prompt tokens served from the
+// provider's prompt cache (e.g. DeepSeek's ¥0.02 / ¥0.025 per M). Models
+// without a cache tier fall back to `input` for the cache-hit bucket.
+export const MODEL_PRICING: Record<string, { input: number; output: number; cacheHit?: number }> = {
   // Anthropic
   'claude-3-5-sonnet-20241022': { input: 3, output: 15 },
   'claude-3-5-haiku-20241022':  { input: 0.8, output: 4 },
@@ -47,9 +54,15 @@ export const MODEL_PRICING: Record<string, { input: number; output: number }> = 
   'gemini-1.5-pro':    { input: 1.25, output: 5 },
   'gemini-1.5-flash':  { input: 0.075, output: 0.3 },
 
-  // DeepSeek
-  'deepseek-chat':     { input: 0.27, output: 1.1 },
-  'deepseek-coder':    { input: 0.27, output: 1.1 },
+  // DeepSeek (CNY→USD at ~7:1, official 2026/06 pricing)
+  //   v4-flash: ¥1 in (miss) / ¥0.02 in (cache hit) / ¥2 out per M
+  //   v4-pro:   ¥3 in (miss) / ¥0.025 in (cache hit) / ¥6 out per M
+  //   Legacy deepseek-chat/reasoner alias to v4-flash, deprecated 2026/07/24
+  'deepseek-v4-flash': { input: 0.14, output: 0.28, cacheHit: 0.0028 },
+  'deepseek-v4-pro':   { input: 0.42, output: 0.84, cacheHit: 0.0035 },
+  'deepseek-chat':     { input: 0.14, output: 0.28, cacheHit: 0.0028 },
+  'deepseek-reasoner': { input: 0.14, output: 0.28, cacheHit: 0.0028 },
+  'deepseek-coder':    { input: 0.14, output: 0.28, cacheHit: 0.0028 },
 
   // Ollama (free, local)
   'llama2':            { input: 0, output: 0 },
@@ -70,22 +83,35 @@ export const MODEL_PRICING: Record<string, { input: number; output: number }> = 
   'moonshot-v1-128k':  { input: 1, output: 2 },
 };
 
-export function getModelPricing(modelId: string, provider: string): { input: number; output: number } {
+export function getModelPricing(modelId: string, _provider: string):
+  { input: number; output: number; cacheHit: number } {
   if (MODEL_PRICING[modelId]) {
-    return MODEL_PRICING[modelId];
+    const p = MODEL_PRICING[modelId];
+    return { input: p.input, output: p.output, cacheHit: p.cacheHit ?? p.input };
   }
   // Default pricing for unknown models
-  return { input: 1, output: 3 };
+  return { input: 1, output: 3, cacheHit: 1 };
 }
 
-export function calculateCost(modelId: string, promptTokens: number, completionTokens: number): { promptCost: number; completionCost: number; totalCost: number } {
+export function calculateCost(
+  modelId: string,
+  promptTokens: number,
+  completionTokens: number,
+  cacheHitTokens: number = 0,
+): { promptCost: number; completionCost: number; totalCost: number } {
   const pricing = getModelPricing(modelId, '');
-  const promptCost = (promptTokens / 1_000_000) * pricing.input;
+
+  // DeepSeek reports prompt_tokens as the sum of cache hits + misses, so
+  // subtract the cached portion to avoid double-charging.
+  const missTokens = Math.max(0, promptTokens - cacheHitTokens);
+  const missCost = (missTokens / 1_000_000) * pricing.input;
+  const hitCost  = (cacheHitTokens / 1_000_000) * pricing.cacheHit;
+  const promptCost = missCost + hitCost;
   const completionCost = (completionTokens / 1_000_000) * pricing.output;
   return {
-    promptCost: Math.round(promptCost * 1000000) / 1000000,
-    completionCost: Math.round(completionCost * 1000000) / 1000000,
-    totalCost: Math.round((promptCost + completionCost) * 1000000) / 1000000,
+    promptCost: Math.round(promptCost * 1_000_000) / 1_000_000,
+    completionCost: Math.round(completionCost * 1_000_000) / 1_000_000,
+    totalCost: Math.round((promptCost + completionCost) * 1_000_000) / 1_000_000,
   };
 }
 
@@ -94,7 +120,8 @@ const TokenUsageSchema = new Schema<ITokenUsage>(
     userId: {
       type: String,
       required: true,
-      index: true,
+      // Indexed via compound { userId: 1, createdAt: -1 } below — declaring
+      // it as `index: true` here would warn about a duplicate.
     },
     sessionId: {
       type: String,
@@ -115,6 +142,10 @@ const TokenUsageSchema = new Schema<ITokenUsage>(
       index: true,
     },
     promptTokens: {
+      type: Number,
+      default: 0,
+    },
+    cacheHitTokens: {
       type: Number,
       default: 0,
     },
@@ -159,6 +190,10 @@ const TokenUsageSchema = new Schema<ITokenUsage>(
       type: Number,
       default: 0,
     },
+    cacheHitPricePerM: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,
@@ -166,7 +201,9 @@ const TokenUsageSchema = new Schema<ITokenUsage>(
   }
 );
 
-// Compound indexes for common queries
+// Compound indexes for common queries. The leading `userId` of these
+// compounds satisfies the single-field index on `userId`, so we don't
+// re-declare a separate { userId: 1 } index here.
 TokenUsageSchema.index({ userId: 1, createdAt: -1 });
 TokenUsageSchema.index({ userId: 1, modelProvider: 1, createdAt: -1 });
 TokenUsageSchema.index({ userId: 1, modelId: 1, createdAt: -1 });

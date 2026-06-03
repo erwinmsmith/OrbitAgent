@@ -25,8 +25,8 @@ redis:
   keyPrefix: "orbit:"
 
 llm:
-  defaultProvider: "anthropic"
-  defaultModel: "claude-3-5-sonnet-20241022"
+  defaultProvider: "deepseek"
+  defaultModel: "deepseek-v4-flash"
 
   # Anthropic Claude 模型选择
   anthropic:
@@ -209,26 +209,47 @@ llm:
           toolCalling: false
           vision: false
 
-  # DeepSeek 模型选择
+  # DeepSeek 模型选择 (OpenAI 兼容 API: https://api.deepseek.com)
   deepseek:
     enabled: true
     models:
-      - id: "deepseek-chat"
-        name: "DeepSeek Chat"
+      - id: "deepseek-v4-flash"
+        name: "DeepSeek V4 Flash"
         enabled: true
-        default: false
-        description: "General purpose chat model"
-        contextWindow: 64000
+        default: true
+        description: "DeepSeek-V4-Flash, 1M context, supports thinking/non-thinking modes"
+        contextWindow: 1000000
         features:
           streaming: true
           toolCalling: true
           vision: false
-      - id: "deepseek-coder"
-        name: "DeepSeek Coder"
+      - id: "deepseek-v4-pro"
+        name: "DeepSeek V4 Pro"
         enabled: true
         default: false
-        description: "Code generation and understanding"
-        contextWindow: 64000
+        description: "DeepSeek-V4-Pro, 1M context, higher quality"
+        contextWindow: 1000000
+        features:
+          streaming: true
+          toolCalling: true
+          vision: false
+      # Legacy model names — deprecated 2026/07/24, alias to v4-flash
+      - id: "deepseek-chat"
+        name: "DeepSeek Chat (Legacy)"
+        enabled: true
+        default: false
+        description: "[DEPRECATED 2026/07/24] Non-thinking mode of deepseek-v4-flash"
+        contextWindow: 1000000
+        features:
+          streaming: true
+          toolCalling: true
+          vision: false
+      - id: "deepseek-reasoner"
+        name: "DeepSeek Reasoner (Legacy)"
+        enabled: true
+        default: false
+        description: "[DEPRECATED 2026/07/24] Thinking mode of deepseek-v4-flash"
+        contextWindow: 1000000
         features:
           streaming: true
           toolCalling: true
@@ -338,7 +359,7 @@ llm:
       timeout: 120000
     deepseek:
       apiKey: "${DEEPSEEK_API_KEY}"
-      baseUrl: "https://api.deepseek.com"
+      baseUrl: "${DEEPSEEK_BASE_URL:https://api.deepseek.com}"
       timeout: 60000
 
 memory:

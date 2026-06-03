@@ -13,7 +13,7 @@ export class DeepSeekAdapter implements ILLMAdapter {
 
   constructor(apiKey: string, baseUrl?: string, timeout?: number) {
     this.apiKey = apiKey;
-    this.baseUrl = baseUrl || 'https://api.deepseek.com';
+    this.baseUrl = baseUrl || process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com';
     this.timeout = timeout || 60000;
   }
 
@@ -37,7 +37,7 @@ export class DeepSeekAdapter implements ILLMAdapter {
   async chat(messages: LLMMessage[], options?: ChatOptions): Promise<ChatResponse> {
     if (!this.client) await this.initialize();
 
-    const model = options?.model || 'deepseek-chat';
+    const model = options?.model || 'deepseek-v4-flash';
 
     const requestMessages = messages.map(msg => ({
       role: msg.role,
@@ -77,6 +77,8 @@ export class DeepSeekAdapter implements ILLMAdapter {
           inputTokens: data.usage.prompt_tokens,
           outputTokens: data.usage.completion_tokens,
           totalTokens: data.usage.total_tokens,
+          // DeepSeek v4 reports cached prompt tokens in `prompt_tokens_details.cached_tokens`.
+          cacheHitTokens: data.usage.prompt_tokens_details?.cached_tokens ?? 0,
         } : undefined,
         toolCalls: choice.message.tool_calls?.map((tc: any) => ({
           id: tc.id,
@@ -86,15 +88,22 @@ export class DeepSeekAdapter implements ILLMAdapter {
         raw: data,
       };
     } catch (error: any) {
-      logger.error('DeepSeek chat error:', error);
-      throw new Error(`DeepSeek API error: ${error.message}`);
+      // Extract a clean message FIRST — winston serializing the raw axios
+      // error blows up on its request<->response cycle, and that stringify
+      // error would otherwise replace our real message.
+      const msg = error?.response?.data?.error?.message
+        || error?.response?.data?.message
+        || error?.message
+        || String(error);
+      logger.error(`DeepSeek chat error: ${msg}`);
+      throw new Error(`DeepSeek API error: ${msg}`);
     }
   }
 
   async *streamChat(messages: LLMMessage[], options?: ChatOptions): AsyncGenerator<StreamChunk> {
     if (!this.client) await this.initialize();
 
-    const model = options?.model || 'deepseek-chat';
+    const model = options?.model || 'deepseek-v4-flash';
 
     const requestMessages = messages.map(msg => ({
       role: msg.role,
@@ -169,6 +178,7 @@ export class DeepSeekAdapter implements ILLMAdapter {
                     inputTokens: data.usage.prompt_tokens,
                     outputTokens: data.usage.completion_tokens,
                     totalTokens: data.usage.total_tokens,
+                    cacheHitTokens: data.usage.prompt_tokens_details?.cached_tokens ?? 0,
                   },
                   finishReason,
                 };
@@ -182,8 +192,12 @@ export class DeepSeekAdapter implements ILLMAdapter {
 
       yield { type: 'done', content: fullContent, finishReason };
     } catch (error: any) {
-      logger.error('DeepSeek stream error:', error);
-      yield { type: 'error', error: error.message };
+      const msg = error?.response?.data?.error?.message
+        || error?.response?.data?.message
+        || error?.message
+        || String(error);
+      logger.error(`DeepSeek stream error: ${msg}`);
+      yield { type: 'error', error: msg };
     }
   }
 
@@ -192,14 +206,16 @@ export class DeepSeekAdapter implements ILLMAdapter {
   }
 
   async listModels(): Promise<ModelInfo[]> {
+    // Pricing in USD/M tokens (converted from CNY at ~7x rate, official 2026/06).
+    // Source: https://api-docs.deepseek.com/quick_start/pricing
     return [
       {
-        id: 'deepseek-chat',
-        name: 'deepseek-chat',
+        id: 'deepseek-v4-flash',
+        name: 'deepseek-v4-flash',
         provider: this.provider,
-        displayName: 'DeepSeek Chat',
-        description: 'General purpose chat model',
-        contextWindow: 64000,
+        displayName: 'DeepSeek V4 Flash',
+        description: 'DeepSeek-V4-Flash, 1M context, supports thinking/non-thinking modes',
+        contextWindow: 1_000_000,
         supportedFeatures: {
           streaming: true,
           toolCalling: true,
@@ -209,12 +225,43 @@ export class DeepSeekAdapter implements ILLMAdapter {
         pricing: { input: 0.14, output: 0.28, currency: 'USD' },
       },
       {
-        id: 'deepseek-coder',
-        name: 'deepseek-coder',
+        id: 'deepseek-v4-pro',
+        name: 'deepseek-v4-pro',
         provider: this.provider,
-        displayName: 'DeepSeek Coder',
-        description: 'Code generation and understanding',
-        contextWindow: 64000,
+        displayName: 'DeepSeek V4 Pro',
+        description: 'DeepSeek-V4-Pro, 1M context, higher quality',
+        contextWindow: 1_000_000,
+        supportedFeatures: {
+          streaming: true,
+          toolCalling: true,
+          vision: false,
+          functionCalling: true,
+        },
+        pricing: { input: 0.42, output: 0.84, currency: 'USD' },
+      },
+      // Legacy aliases — server-side alias to v4-flash, scheduled removal 2026/07/24
+      {
+        id: 'deepseek-chat',
+        name: 'deepseek-chat',
+        provider: this.provider,
+        displayName: 'DeepSeek Chat (Legacy)',
+        description: '[DEPRECATED 2026/07/24] Non-thinking mode of deepseek-v4-flash',
+        contextWindow: 1_000_000,
+        supportedFeatures: {
+          streaming: true,
+          toolCalling: true,
+          vision: false,
+          functionCalling: true,
+        },
+        pricing: { input: 0.14, output: 0.28, currency: 'USD' },
+      },
+      {
+        id: 'deepseek-reasoner',
+        name: 'deepseek-reasoner',
+        provider: this.provider,
+        displayName: 'DeepSeek Reasoner (Legacy)',
+        description: '[DEPRECATED 2026/07/24] Thinking mode of deepseek-v4-flash',
+        contextWindow: 1_000_000,
         supportedFeatures: {
           streaming: true,
           toolCalling: true,
