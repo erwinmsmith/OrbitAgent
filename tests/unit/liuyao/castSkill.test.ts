@@ -16,8 +16,26 @@ describe('castSkill (manual 0/1 → yao values)', () => {
     expect(() => castSkill({ bits: [0, 1, 1] as any })).toThrow();
   });
 
-  it('rejects interpretation=coin in MVP', () => {
-    expect(() => castSkill({ bits: [0, 0, 0, 0, 0, 0], interpretation: 'coin' })).toThrow(/not supported in MVP/);
+  it('rejects when neither bits nor yaoValues is supplied', () => {
+    expect(() => castSkill({} as any)).toThrow(/must supply/);
+  });
+
+  it('rejects when both bits and yaoValues are supplied', () => {
+    expect(() => castSkill({ bits: [0,0,0,0,0,0], yaoValues: [7,7,7,7,7,7] } as any)).toThrow(/not both/);
+  });
+});
+
+describe('castSkill (raw 6/7/8/9 yaoValues)', () => {
+  it('passes yaoValues through unchanged', () => {
+    const r = castSkill({ yaoValues: [7, 8, 9, 6, 7, 8] });
+    expect(r.rawValues).toEqual([7, 8, 9, 6, 7, 8]);
+    // Moving lines: 老阳(9) at position 3, 老阴(6) at position 4.
+    expect(r.movingPositions).toEqual([3, 4]);
+    expect(r.linesBottomToTop.map((l) => l.yinYang)).toEqual(['阳', '阴', '阳', '阴', '阳', '阴']);
+  });
+
+  it('rejects yaoValues with values outside 6/7/8/9', () => {
+    expect(() => castSkill({ yaoValues: [7, 7, 7, 7, 7, 5] as any })).toThrow(/6\|7\|8\|9/);
   });
 });
 

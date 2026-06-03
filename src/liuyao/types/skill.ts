@@ -14,12 +14,23 @@ export type { ChartResult, CastResult, HexagramSkillOutput, ChartLine, HexagramM
 // ─── 5.1 Casting Skill ────────────────────────────────────────────────
 export interface CastSkillInput {
   /**
-   * 6 raw bits, one per line, bottom-to-top.
-   * Two ways to interpret:
-   *  - 'manual': 0=阴, 1=阳 (default, used by the CLI's `0 1 1 0 1 1` input)
-   *  - 'coin':   3-coin 火珠林 derivation (not implemented in MVP)
+   * 6 raw bits, one per line, bottom-to-top. The default input mode
+   * for the CLI's `0 1 1 0 1 1`. Static — 0=阴(8), 1=阳(7); no
+   * moving lines.
    */
-  bits: [0 | 1, 0 | 1, 0 | 1, 0 | 1, 0 | 1, 0 | 1];
+  bits?: [0 | 1, 0 | 1, 0 | 1, 0 | 1, 0 | 1, 0 | 1];
+  /**
+   * 6 explicit 爻值 (6/7/8/9), one per line, bottom-to-top. Use this
+   * when you want to feed moving lines (6 = 老阴, 9 = 老阳) instead
+   * of the static-only bits mode. Mutually exclusive with `bits`.
+   */
+  yaoValues?: [YaoValue, YaoValue, YaoValue, YaoValue, YaoValue, YaoValue];
+  /**
+   * @deprecated  Use `bits` for manual input or `yaoValues` for raw
+   *  爻值. Kept for backward compatibility — `manual` means use
+   *  `bits`; `coin` is no longer supported here (use
+   *  threeCoinsToYaoValue() at the CLI layer to derive yaoValues).
+   */
   interpretation?: 'manual' | 'coin';
 }
 export type CastSkillOutput = CastResult;

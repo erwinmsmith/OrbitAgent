@@ -88,14 +88,25 @@ router.post('/chart', asyncHandler(async (req: Request, res: Response) => {
     question: body.question,
     questionType: body.questionType,
     bits: body.bits,
+    yaoValues: body.yaoValues,
     dayStem: body.dayStem,
     dayBranch: body.dayBranch,
     monthBranch: body.monthBranch,
     datetime: body.datetime,
     timezone: body.timezone,
   };
-  if (!Array.isArray(input.bits) || input.bits.length !== 6) {
-    throw new AppError('VALIDATION_ERROR', 'bits must be an array of 6 entries (0 or 1)', HTTP_STATUS.BAD_REQUEST);
+  // Accept either bits (6 × 0/1, static) or yaoValues (6 × 6/7/8/9,
+  // supports moving lines). The castSkill will throw a clear error
+  // if neither is provided or if both are.
+  if (!Array.isArray(input.bits) && !Array.isArray(input.yaoValues)) {
+    throw new AppError('VALIDATION_ERROR',
+      'either `bits` (6 × 0/1) or `yaoValues` (6 × 6/7/8/9) is required',
+      HTTP_STATUS.BAD_REQUEST);
+  }
+  if (Array.isArray(input.bits) && Array.isArray(input.yaoValues)) {
+    throw new AppError('VALIDATION_ERROR',
+      'pass either `bits` OR `yaoValues`, not both',
+      HTTP_STATUS.BAD_REQUEST);
   }
   const chart = assembleChart(input);
   const chartKey = body.chartKey || 'default';

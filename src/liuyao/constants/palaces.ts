@@ -15,7 +15,7 @@
  *
  * ✅ Pure derivation once HEXAGRAMS gives us palaceType.
  */
-import type { LinePosition, Palace, PalaceType } from '../types/basic';
+import type { LinePosition, Palace, PalaceType, Trigram } from '../types/basic';
 
 const SHI_BY_TYPE: Record<PalaceType, LinePosition> = {
   '本宫': 6,
@@ -43,3 +43,19 @@ export const PALACES: readonly Palace[] = [
   '乾宫', '坎宫', '艮宫', '震宫',
   '巽宫', '离宫', '坤宫', '兑宫',
 ] as const;
+
+/** Trigram → its palace. The trigram that "defines" a 宫 is the
+ *  fixed one in the 八宫八卦 progression (e.g. 乾宫八卦 all carry
+ *  乾 in either the upper or lower position). Used by hexagramData.ts
+ *  to derive the palace of a hexagram from its (upper, lower)
+ *  trigram pair. */
+export const PALACE_OF_TRIGRAM: Record<Trigram, Palace> = {
+  '乾': '乾宫', '坎': '坎宫', '艮': '艮宫', '震': '震宫',
+  '巽': '巽宫', '离': '离宫', '坤': '坤宫', '兑': '兑宫',
+};
+
+/** Reverse: palace → its defining trigram. */
+export const TRIGRAM_OF_PALACE: Record<Palace, Trigram> = {
+  '乾宫': '乾', '坎宫': '坎', '艮宫': '艮', '震宫': '震',
+  '巽宫': '巽', '离宫': '离', '坤宫': '坤', '兑宫': '兑',
+};

@@ -32,7 +32,7 @@ export function registerDivination(program: Command): void {
     });
 
   cmd.command('chart <bits...>')
-    .description('Run the full chart assembler AND persist it to the session store. --session is REQUIRED so the agent can read it back later.')
+    .description('Run the full chart assembler AND persist it to the session store. --session is REQUIRED so the agent can read it back later. By default the positional args are 6 × 0/1 (static yin/yang). Pass --yao to switch to 6 × 6/7/8/9 (supports moving lines 6 and 9).')
     .option('-q, --question <q>', 'Question text (used for 用神 + analysis)')
     .option('--question-type <t>', 'Override question type (e.g. 求财, 求事业)')
     .option('--day-stem <s>', '日干 (e.g. 甲) — needed for 六神 + 旬空')
@@ -40,10 +40,17 @@ export function registerDivination(program: Command): void {
     .option('--month-branch <b>', '月支 (e.g. 寅) — needed for 月破 + 旺衰')
     .option('-s, --session <id>', 'Session id under which to store the chart (auto-generated if omitted; pass the same value to `orbit chat` later)')
     .option('--chart-key <k>', 'Logical name for this chart within the session (default: "default")', 'default')
+    .option('--yao', 'Interpret the 6 positional args as 6/7/8/9 爻值 (with moving lines) instead of 0/1 bits.', false)
     .action(async (bits: string[], opts) => {
-      const arr = parseSixBits(bits);
       const sessionId = opts.session || `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      const body: any = { bits: arr, sessionId, chartKey: opts.chartKey };
+      const body: any = { sessionId, chartKey: opts.chartKey };
+      if (opts.yao) {
+        const yaoArr = parseSixYao(bits);
+        body.yaoValues = yaoArr;
+      } else {
+        const arr = parseSixBits(bits);
+        body.bits = arr;
+      }
       if (opts.question) body.question = opts.question;
       if (opts.questionType) body.questionType = opts.questionType;
       if (opts.dayStem) body.dayStem = opts.dayStem;
@@ -62,7 +69,20 @@ export function registerDivination(program: Command): void {
         console.log(`  sessionId: ${chalk.cyan(sessionId)}`);
         console.log(`  chartKey:   ${chalk.cyan(opts.chartKey)}`);
         console.log(`  orig:       ${chalk.cyan(data.originalHexagram?.name ?? '?')}`);
+        console.log(`  changed:    ${chalk.cyan(data.changedHexagram?.name ?? '?')}`);
+        console.log(`  palace:     ${chalk.cyan(`${data.originalHexagram?.palace ?? '?'}宫 · ${data.originalHexagram?.palaceType ?? '?'} · ${data.originalHexagram?.element ?? '?'}`)}`);
+        console.log(`  shi/ying:   ${chalk.cyan(`${data.lines?.find((l: any) => l.isShi)?.position ?? '?'}/${data.lines?.find((l: any) => l.isYing)?.position ?? '?'}`)}`);
         console.log(`  moving:     ${chalk.cyan((data.movingLines || []).join(',') || 'none')}`);
+        // First-step proof: show the 6 lines' (branch, sixRelative, sixGod) so the
+        // user can visually confirm the deterministic engine produced the right
+        // 装卦. The agent has all of this and more.
+        if (Array.isArray(data.lines)) {
+          console.log();
+          console.log(chalk.gray('  Lines (pos: branch sixRelative sixGod):'));
+          for (const l of data.lines) {
+            console.log(chalk.gray(`    ${l.position}: ${l.branch} ${l.sixRelative} 临${l.sixGod}${l.void ? ' [旬空]' : ''}`));
+          }
+        }
         console.log();
         console.log(chalk.gray(`Next: orbit chat --session ${sessionId} "帮我分析"`));
         console.log(chalk.gray(`Or:   orbit divination analyze <chart.json>  (for a stand-alone report)`));
@@ -216,6 +236,23 @@ function parseSixBits(bits: string[]): [0 | 1, 0 | 1, 0 | 1, 0 | 1, 0 | 1, 0 | 1
     const v = bits[i]!.trim();
     if (v !== '0' && v !== '1') {
       console.error(chalk.red(`✗ bit ${i + 1} must be 0 or 1, got "${bits[i]}"`));
+      process.exit(2);
+    }
+    out[i] = v as any;
+  }
+  return out;
+}
+
+function parseSixYao(values: string[]): [6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8 | 9] {
+  if (values.length !== 6) {
+    console.error(chalk.red(`✗ need exactly 6 爻值, got ${values.length}`));
+    process.exit(2);
+  }
+  const out: [6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8 | 9] = [7, 7, 7, 7, 7, 7];
+  for (let i = 0; i < 6; i++) {
+    const v = parseInt(values[i]!.trim(), 10);
+    if (v !== 6 && v !== 7 && v !== 8 && v !== 9) {
+      console.error(chalk.red(`✗ yao value ${i + 1} must be 6/7/8/9, got "${values[i]}"`));
       process.exit(2);
     }
     out[i] = v as any;

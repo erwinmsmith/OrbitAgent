@@ -31,8 +31,12 @@ import type { LinePosition as LP } from '../types/basic';
 export interface AssembleInput {
   question?: string;
   questionType?: QuestionType;
-  /** Six raw bits, one per line, bottom-to-top. 0=阴, 1=阳. */
-  bits: [0 | 1, 0 | 1, 0 | 1, 0 | 1, 0 | 1, 0 | 1];
+  /** Six raw bits, one per line, bottom-to-top. 0=阴, 1=阳.
+   *  Mutually exclusive with `yaoValues`. */
+  bits?: [0 | 1, 0 | 1, 0 | 1, 0 | 1, 0 | 1, 0 | 1];
+  /** Six raw 爻值 (6/7/8/9), one per line, bottom-to-top. Use this
+   *  to feed moving lines (6/9) instead of the static-only bits mode. */
+  yaoValues?: [6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8 | 9];
   /** Optional — pass when available. The MVP path requires this. */
   dayStem?: HeavenlyStem;
   dayBranch?: EarthlyBranch;
@@ -46,7 +50,10 @@ export function assembleChart(input: AssembleInput): ChartResult {
   const warnings: string[] = [];
 
   // Step 3 — Casting
-  const cast: CastSkillOutput = castSkill({ bits: input.bits });
+  const cast: CastSkillOutput = castSkill({
+    bits: input.bits,
+    yaoValues: input.yaoValues as any,
+  });
 
   // Step 4 — Hexagram (graceful: empty HEXAGRAMS table → record warning
   // and continue with placeholder bits so the rest of the chart can still
@@ -204,7 +211,7 @@ export function assembleChart(input: AssembleInput): ChartResult {
   const partialChart: ChartResult = {
     question: input.question,
     questionType: input.questionType,
-    input: { type: 'coins', raw: input.bits },
+    input: { type: 'coins', raw: input.yaoValues ?? input.bits },
     time: input.datetime ? { datetime: input.datetime, timezone: input.timezone } : undefined,
     originalHexagram: (hex.originalHexagram ?? {
       id: 0, name: '?', upper: '乾', lower: '乾', palace: '乾宫',
