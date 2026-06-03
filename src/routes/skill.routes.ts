@@ -1,8 +1,14 @@
 import { Router, Request, Response } from 'express';
-import { asyncHandler } from '../middleware/errorHandler';
+import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import { getSkillManager } from '../core/skills/SkillManager';
 import { HTTP_STATUS } from '../constants';
+import {
+  installSkill,
+  uninstallSkill,
+  listInstalledSkills,
+  reloadSkills,
+} from '../services/SkillInstaller';
 
 const router = Router();
 
@@ -19,7 +25,49 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
   });
 }));
 
-// Get skill details
+// ────────────────────────────────────────────────────────────────────────
+// Install / uninstall
+//
+// IMPORTANT: these routes are declared BEFORE `/:id` so that `installed`
+// isn't captured as an id. Express matches in declaration order.
+// ────────────────────────────────────────────────────────────────────────
+
+router.post('/install', asyncHandler(async (req: Request, res: Response) => {
+  const { source, path, url, content, filename } = req.body || {};
+  if (!source || !['path', 'url', 'inline'].includes(source)) {
+    throw new AppError('VALIDATION_ERROR', 'source must be one of: path, url, inline', HTTP_STATUS.BAD_REQUEST);
+  }
+  const result = await installSkill({ source, path, url, content, filename });
+  res.json({ success: true, data: result });
+}));
+
+router.delete('/install/:id', adminOnly, asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const removed = await uninstallSkill(id);
+  if (!removed) {
+    return res.status(HTTP_STATUS.NOT_FOUND).json({
+      success: false,
+      error: { code: 'SKILL_NOT_FOUND', message: `No installed skill with id "${id}"` },
+    });
+  }
+  res.json({ success: true, data: { id, uninstalled: true } });
+}));
+
+router.get('/installed', asyncHandler(async (_req: Request, res: Response) => {
+  res.json({ success: true, data: await listInstalledSkills() });
+}));
+
+// Reload all skill directories (re-scan ~/.orbit/skills etc.). Used after
+// install/uninstall so the new file shows up in /skills without restart.
+router.post('/reload', asyncHandler(async (_req: Request, res: Response) => {
+  const mgr = getSkillManager();
+  await reloadSkills(mgr);
+  res.json({ success: true, data: { skillCount: mgr.listSkills().length } });
+}));
+
+// Get skill details — declared LAST so it doesn't capture the literal
+// route names above. Returns the full frontmatter + markdown body so
+// consumers can re-render the .md if they need to.
 router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
 
@@ -33,18 +81,12 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
     });
   }
 
-  const config = skillManager.getSkillConfig(id);
-
   res.json({
     success: true,
     data: {
-      id: skill.id,
-      name: skill.name,
-      description: skill.description,
-      version: skill.version,
-      triggers: skill.triggers,
-      priority: skill.priority,
-      config,
+      ...skill.config,
+      filePath: skill.filePath,
+      body: skill.body,
     },
   });
 }));
@@ -63,9 +105,6 @@ router.patch('/:id', adminOnly, asyncHandler(async (req: Request, res: Response)
       error: { code: 'SKILL_NOT_FOUND', message: 'Skill not found' },
     });
   }
-
-  // Note: This would require modifying the SkillManager to support config updates
-  // For now, we just return success
 
   res.json({
     success: true,

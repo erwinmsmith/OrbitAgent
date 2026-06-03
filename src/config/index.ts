@@ -115,8 +115,14 @@ const configSchema = z.object({
     defaultAgentId: z.string().default('default'),
   }),
   skills: z.object({
-    configPath: z.string().default('./configs/skills.yaml'),
+    // Back-compat: keep configPath as an optional field so old configs that
+    // only declare a path don't error out. New configs should use `dirs`.
+    configPath: z.string().optional(),
     autoLoad: z.boolean().default(true),
+    // Extra directories (relative or absolute, ~ supported) to scan for
+    // .md skill files in addition to the bundled builtins directory.
+    // Order matters: later dirs override earlier ids.
+    dirs: z.array(z.string()).optional(),
   }),
   tools: z.object({
     configPath: z.string().default('./configs/tools.yaml'),

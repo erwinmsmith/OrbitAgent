@@ -1,247 +1,206 @@
-import fs from 'fs';
+import fs from 'fs/promises';
 import path from 'path';
-import yaml from 'js-yaml';
-import { ISkill, SkillConfig, SkillContext, SkillResult, SkillRegistration } from './types';
-import ContextEnrichmentSkill from './builtins/ContextEnrichmentSkill';
-import IntentClassificationSkill from './builtins/IntentClassificationSkill';
+import { ISkill, SkillConfig, SkillContext, SkillResult, SkillTrigger } from './types';
+import { loadAllSkillsFromDir, type ParsedSkillFile } from './parser';
 import { logger } from '../../utils/logger';
 import { getConfig } from '../../config';
 
-// Built-in skill constructors — registered by default, then overridable
-// by entries in configs/skills.yaml (enabled flag, triggers, priority).
-const BUILTIN_SKILL_CTORS: Array<new () => ISkill> = [
-  ContextEnrichmentSkill,
-  IntentClassificationSkill,
-];
+/**
+ * Default skill directories — relative to the project root unless the env
+ * ORBIT_SKILLS_DIR adds extras. Override via the `skills.dirs` list in
+ * config.yaml (or per-env) to control which paths are scanned at boot.
+ */
+const DEFAULT_BUILTIN_DIR = path.resolve(process.cwd(), 'src/core/skills/builtins');
+
+/**
+ * Built-in runtime handlers keyed by skill id. .md files provide the
+ * description / frontmatter; the behaviour for each builtin id is
+ * implemented in TypeScript here so it can use the same SkillContext /
+ * SkillResult contract as before.
+ *
+ * User-installed skills (under ~/.orbit/skills/) are registered as
+ * no-op skills whose `body` is exposed to the chat handler as a system
+ * message — i.e. they are documentation/prompt skills, not executable
+ * ones. Adding a new executable user-skill requires writing a `.skill.ts`
+ * file in the user dir; the parser ignores anything that isn't `.md`.
+ */
+const BUILTIN_HANDLERS: Record<string, (context: SkillContext) => Promise<SkillResult>> = {
+  'context-enrichment': async (ctx) => {
+    const msg = ctx.currentMessage.content || '';
+    const language = /[一-鿿]/.test(msg) ? 'zh' : 'en';
+    return {
+      success: true,
+      shouldContinue: true,
+      variables: {
+        messageLength: msg.length,
+        historyTurns: ctx.messages.length,
+        language,
+      },
+    };
+  },
+  'intent-classification': async (ctx) => {
+    const msg = ctx.currentMessage.content || '';
+    const intents: Array<[string, RegExp]> = [
+      ['help',     /\b(help|usage|how to|怎么|如何|帮助)\b/i],
+      ['question', /\?|？|why|what|when|where|who|how/i],
+      ['command',  /^\s*[\/!](\w+)/],
+    ];
+    let intent = 'chat';
+    for (const [name, re] of intents) {
+      if (re.test(msg)) { intent = name; break; }
+    }
+    return { success: true, shouldContinue: true, variables: { intent } };
+  },
+};
+
+export interface RegisteredSkill {
+  /** Parsed config from the .md frontmatter. */
+  config: SkillConfig;
+  /** Absolute path of the source .md file. */
+  filePath: string;
+  /** Markdown body — appended to the system prompt by the chat handler. */
+  body: string;
+  /** The runtime function. Falls back to a no-op for skills without a handler. */
+  run: (context: SkillContext) => Promise<SkillResult>;
+}
 
 export class SkillManager {
-  private skills: Map<string, SkillRegistration> = new Map();
-  private skillDir: string;
-  private autoLoad: boolean;
-  private configPath: string;
+  private skills: Map<string, RegisteredSkill> = new Map();
+  private dirs: string[];
 
-  constructor(skillDir?: string, autoLoad?: boolean, configPath?: string) {
-    this.skillDir = skillDir || path.resolve(process.cwd(), 'src/core/skills/builtins');
-    this.autoLoad = autoLoad ?? true;
-    // Default to the path declared in config.yaml (skills.configPath).
-    this.configPath = configPath || path.resolve(process.cwd(), getConfig().skills.configPath);
+  constructor(opts?: { dirs?: string[] }) {
+    // Precedence: explicit arg > env ORBIT_SKILLS_DIR (colon-separated) > config > builtins.
+    const configDirs = (getConfig().skills as any).dirs as string[] | undefined;
+    const envDirs = (process.env.ORBIT_SKILLS_DIR || '')
+      .split(':').map((s) => s.trim()).filter(Boolean);
+    const raw = [
+      ...(opts?.dirs || []),
+      ...envDirs,
+      ...(configDirs || []),
+      DEFAULT_BUILTIN_DIR,
+    ];
+    // Expand leading "~" to $HOME so the boot-time scan and the install
+    // service agree on the install target.
+    const home = require('os').homedir();
+    this.dirs = raw.map((d) => d.startsWith('~/') ? home + d.slice(1) : d);
   }
 
+  /** Where the manager scans for .md skill files. */
+  getDirs(): string[] { return [...this.dirs]; }
+
   async initialize(): Promise<void> {
-    if (this.autoLoad) {
-      // 1. Register built-in skill classes (the actual implementations).
-      for (const Ctor of BUILTIN_SKILL_CTORS) {
-        try {
-          await this.register(new Ctor());
-        } catch (err) {
-          logger.error('Failed to register built-in skill:', err);
-        }
+    for (const dir of this.dirs) {
+      const parsed = await loadAllSkillsFromDir(dir);
+      for (const skill of parsed) {
+        this.register(skill);
       }
-      // 2. Merge declarative config (configs/skills.yaml) over the defaults —
-      //    lets ops disable a skill or tweak triggers without code changes.
-      await this.loadSkillsFromConfig(this.configPath);
     }
-    logger.info('SkillManager initialized', { skillCount: this.skills.size });
+    logger.info('SkillManager initialized', {
+      skillCount: this.skills.size,
+      dirs: this.dirs,
+    });
   }
 
   async destroy(): Promise<void> {
-    // Call unload on all skills
-    for (const [id, registration] of this.skills) {
-      if (registration.skill.onUnload) {
-        try {
-          await registration.skill.onUnload();
-          logger.debug(`Skill ${id} unloaded`);
-        } catch (error) {
-          logger.error(`Error unloading skill ${id}:`, error);
-        }
-      }
-    }
     this.skills.clear();
     logger.info('SkillManager destroyed');
   }
 
-  async register(skill: ISkill, config?: Partial<SkillConfig>): Promise<void> {
-    const skillConfig: SkillConfig = {
-      id: skill.id,
-      name: skill.name,
-      description: skill.description,
-      version: skill.version,
-      enabled: true,
-      triggers: skill.triggers,
-      priority: skill.priority,
-      ...config,
-    };
-
-    // Call onLoad if defined
-    if (skill.onLoad) {
-      await skill.onLoad();
+  /**
+   * Register a parsed .md skill. If a skill with the same id is already
+   * registered we honour precedence: explicit `.register(skill)` after
+   * initialize() wins, and on the first `register()` from .md a warning
+   * is logged for duplicate ids across the scanned directories.
+   */
+  register(skill: ParsedSkillFile | { filePath: string; config: SkillConfig; body: string }): void {
+    const handler = BUILTIN_HANDLERS[skill.config.id];
+    const run: RegisteredSkill['run'] = handler
+      ? (ctx) => handler(ctx)
+      : async () => ({ success: true, shouldContinue: true });
+    if (this.skills.has(skill.config.id)) {
+      logger.warn(`Duplicate skill id "${skill.config.id}" — overwriting with ${skill.filePath}`);
     }
-
-    this.skills.set(skill.id, { skill, config: skillConfig });
-    logger.info(`Skill registered: ${skill.id} (${skill.name})`);
+    this.skills.set(skill.config.id, {
+      config: skill.config,
+      filePath: skill.filePath,
+      body: skill.body,
+      run,
+    });
+    logger.info(`Skill loaded: ${skill.config.id} (${skill.config.name}) from ${path.basename(skill.filePath)}`);
   }
 
   async unregister(skillId: string): Promise<boolean> {
-    const registration = this.skills.get(skillId);
-    if (!registration) {
-      return false;
-    }
-
-    if (registration.skill.onUnload) {
-      await registration.skill.onUnload();
-    }
-
-    this.skills.delete(skillId);
-    logger.info(`Skill unregistered: ${skillId}`);
-    return true;
+    return this.skills.delete(skillId);
   }
 
-  getSkill(skillId: string): ISkill | null {
-    return this.skills.get(skillId)?.skill || null;
-  }
-
-  getSkillConfig(skillId: string): SkillConfig | null {
-    return this.skills.get(skillId)?.config || null;
-  }
+  getSkill(skillId: string): RegisteredSkill | null { return this.skills.get(skillId) || null; }
+  getSkillConfig(skillId: string): SkillConfig | null { return this.skills.get(skillId)?.config || null; }
+  getSkillBody(skillId: string): string | null { return this.skills.get(skillId)?.body || null; }
 
   listSkills(enabledOnly: boolean = false): SkillConfig[] {
     const list: SkillConfig[] = [];
-    for (const registration of this.skills.values()) {
-      if (!enabledOnly || registration.config.enabled) {
-        list.push(registration.config);
-      }
+    for (const s of this.skills.values()) {
+      if (!enabledOnly || s.config.enabled) list.push(s.config);
     }
     return list.sort((a, b) => b.priority - a.priority);
   }
 
+  /**
+   * Run all enabled skills whose trigger matches, in priority order.
+   * Each skill's return value is folded into the shared context:
+   *   - `variables` → merged into context.variables
+   *   - `modifiedContent` → replaces the user message
+   *   - `shouldContinue: false` → halts the pipeline
+   */
   async executeSkills(context: SkillContext): Promise<SkillContext> {
-    const sortedSkills = Array.from(this.skills.values())
-      .filter(reg => reg.config.enabled)
+    const sorted = Array.from(this.skills.values())
+      .filter((s) => s.config.enabled)
       .sort((a, b) => b.config.priority - a.config.priority);
 
-    let currentContext = context;
-
-    for (const registration of sortedSkills) {
-      // Check if skill should be triggered
-      if (!this.shouldTrigger(registration.skill, currentContext)) {
-        continue;
-      }
-
+    let current = context;
+    for (const skill of sorted) {
+      if (!this.shouldTrigger(skill.config.triggers, current)) continue;
       try {
-        logger.debug(`Executing skill: ${registration.skill.id}`);
-        const result = await registration.skill.execute(currentContext);
-
+        logger.debug(`Executing skill: ${skill.config.id}`);
+        const result = await skill.run(current);
         if (result.success) {
-          // Update context with skill results
           if (result.variables) {
-            currentContext.variables = {
-              ...currentContext.variables,
-              ...result.variables,
-            };
+            current.variables = { ...current.variables, ...result.variables };
           }
-
-          if (result.modifiedContent && currentContext.currentMessage) {
-            currentContext.currentMessage.content = result.modifiedContent;
+          if (result.modifiedContent && current.currentMessage) {
+            current.currentMessage.content = result.modifiedContent;
           }
         }
-
-        // Check if we should stop processing
         if (!result.shouldContinue) {
-          logger.debug(`Skill ${registration.skill.id} stopped further processing`);
+          logger.debug(`Skill ${skill.config.id} stopped further processing`);
           break;
         }
       } catch (error) {
-        logger.error(`Error executing skill ${registration.skill.id}:`, error);
-        if (registration.skill.onError) {
-          registration.skill.onError(error as Error);
-        }
+        logger.error(`Error executing skill ${skill.config.id}:`, error);
       }
     }
-
-    return currentContext;
+    return current;
   }
 
-  private shouldTrigger(skill: ISkill, context: SkillContext): boolean {
-    // If no triggers, skill is always available
-    if (!skill.triggers || skill.triggers.length === 0) {
-      return true;
-    }
-
-    for (const trigger of skill.triggers) {
-      switch (trigger.type) {
+  private shouldTrigger(triggers: SkillTrigger[], context: SkillContext): boolean {
+    for (const t of triggers) {
+      switch (t.type) {
         case 'always':
           return true;
-
         case 'keyword':
-          if (context.currentMessage.content.toLowerCase().includes(trigger.pattern.toLowerCase())) {
-            return true;
-          }
+          if (context.currentMessage.content.toLowerCase().includes(t.pattern.toLowerCase())) return true;
           break;
-
         case 'regex':
           try {
-            const regex = new RegExp(trigger.pattern, 'i');
-            if (regex.test(context.currentMessage.content)) {
-              return true;
-            }
-          } catch {
-            logger.warn(`Invalid regex pattern for skill ${skill.id}: ${trigger.pattern}`);
-          }
+            if (new RegExp(t.pattern, 'i').test(context.currentMessage.content)) return true;
+          } catch { logger.warn(`Invalid regex trigger: ${t.pattern}`); }
           break;
-
         case 'intent':
-          // Intent detection would be implemented here
-          // For now, check if variable matches
-          if (context.variables.intent === trigger.pattern) {
-            return true;
-          }
+          if (context.variables?.intent === t.pattern) return true;
           break;
       }
     }
-
     return false;
-  }
-
-  private async loadBuiltInSkills(): Promise<void> {
-    // Kept for backwards compatibility — initialize() now registers built-ins
-    // via BUILTIN_SKILL_CTORS so the build (dist/) doesn't depend on src/.
-    logger.debug('loadBuiltInSkills() is deprecated; built-ins are registered in initialize()');
-  }
-
-  async loadSkillsFromConfig(configPath: string): Promise<void> {
-    try {
-      if (!fs.existsSync(configPath)) {
-        logger.warn(`Skills config not found: ${configPath}`);
-        return;
-      }
-
-      const content = fs.readFileSync(configPath, 'utf-8');
-      const parsed = yaml.load(content) as { skills?: Partial<SkillConfig>[] };
-
-      if (!parsed?.skills) return;
-
-      for (const entry of parsed.skills) {
-        if (!entry.id) continue;
-        const registration = this.skills.get(entry.id);
-        if (!registration) {
-          logger.warn(`Skill in config has no implementation registered: ${entry.id}`);
-          continue;
-        }
-        // Merge declarative overrides onto the registration's config — keep
-        // implementation-supplied defaults for any field the yaml omits.
-        registration.config = {
-          ...registration.config,
-          ...entry,
-          id: registration.skill.id, // never let yaml change the id
-        };
-        logger.debug(`Skill config merged from yaml: ${entry.id}`, {
-          enabled: registration.config.enabled,
-          priority: registration.config.priority,
-        });
-      }
-    } catch (error) {
-      logger.error('Failed to load skills from config:', error);
-    }
   }
 }
 
@@ -249,9 +208,7 @@ export class SkillManager {
 let skillManagerInstance: SkillManager | null = null;
 
 export function getSkillManager(): SkillManager {
-  if (!skillManagerInstance) {
-    skillManagerInstance = new SkillManager();
-  }
+  if (!skillManagerInstance) skillManagerInstance = new SkillManager();
   return skillManagerInstance;
 }
 
@@ -267,5 +224,8 @@ export async function destroySkillManager(): Promise<void> {
     skillManagerInstance = null;
   }
 }
+
+/** Re-exported for tests. */
+export type { ParsedSkillFile } from './parser';
 
 export default SkillManager;

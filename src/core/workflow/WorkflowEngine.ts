@@ -292,7 +292,7 @@ export class WorkflowEngine implements IWorkflowEngine {
         continue;
       }
 
-      const result = await skill.execute({
+      const result = await skill.run({
         userId: execution.context.userId,
         sessionId: execution.context.sessionId,
         conversationId: execution.context.conversationId,
