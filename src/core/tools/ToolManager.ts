@@ -1,10 +1,22 @@
 import { ITool, ToolDefinition, ToolParams, ToolResult, ToolRegistration, MCPServerConfig, MCPClient } from './types';
 import { BaseTool } from './types';
+import FilesystemTool from './builtins/FilesystemTool';
+import SearchTool from './builtins/SearchTool';
+import fs from 'fs';
+import path from 'path';
+import yaml from 'js-yaml';
 import { logger } from '../../utils/logger';
 import { getConfig } from '../../config';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import axios from 'axios';
+
+// Built-in tool constructors — registered in initialize(), then enabled/disabled
+// based on configs/tools.yaml.
+const BUILTIN_TOOL_CTORS: Array<new () => ITool> = [
+  FilesystemTool,
+  SearchTool,
+];
 
 // Local MCP Client implementation
 class LocalMCPClient implements MCPClient {
@@ -234,7 +246,20 @@ export class ToolManager {
   async initialize(): Promise<void> {
     const config = getConfig();
 
-    // Initialize local MCP servers
+    // 1. Register built-in tool implementations.
+    for (const Ctor of BUILTIN_TOOL_CTORS) {
+      try {
+        await this.register(new Ctor());
+      } catch (err) {
+        logger.error('Failed to register built-in tool:', err);
+      }
+    }
+
+    // 2. Apply configs/tools.yaml — toggles `enabled` per tool id. Tools listed
+    //    in yaml without a built-in implementation are warned and skipped.
+    await this.loadToolsFromConfig(config.tools.configPath);
+
+    // 3. Initialize local/remote MCP servers (unchanged).
     if (config.tools.mcpServers) {
       for (const serverConfig of config.tools.mcpServers) {
         await this.registerMCPServer(serverConfig);
@@ -245,6 +270,32 @@ export class ToolManager {
       toolCount: this.tools.size,
       mcpServerCount: this.mcpClients.size,
     });
+  }
+
+  private async loadToolsFromConfig(configPath: string): Promise<void> {
+    try {
+      const abs = path.resolve(process.cwd(), configPath);
+      if (!fs.existsSync(abs)) {
+        logger.warn(`Tools config not found: ${abs}`);
+        return;
+      }
+      const parsed = yaml.load(fs.readFileSync(abs, 'utf-8')) as
+        | { tools?: Array<{ id: string; enabled?: boolean }> }
+        | null;
+      if (!parsed?.tools) return;
+
+      for (const entry of parsed.tools) {
+        if (!entry.id) continue;
+        const reg = this.tools.get(entry.id);
+        if (!reg) {
+          logger.warn(`Tool in config has no built-in implementation: ${entry.id}`);
+          continue;
+        }
+        if (typeof entry.enabled === 'boolean') reg.enabled = entry.enabled;
+      }
+    } catch (err) {
+      logger.error('Failed to load tools from config:', err);
+    }
   }
 
   async destroy(): Promise<void> {

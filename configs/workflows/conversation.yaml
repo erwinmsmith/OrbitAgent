@@ -17,7 +17,7 @@ stages:
     type: llm
     name: LLM Inference
     description: Generate response using LLM
-    model: ${AGENT_DEFAULT_MODEL}
+    model: ${defaultModel}
     next: postprocess
     onError: stop
 

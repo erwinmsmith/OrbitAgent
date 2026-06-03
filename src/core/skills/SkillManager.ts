@@ -2,21 +2,44 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import { ISkill, SkillConfig, SkillContext, SkillResult, SkillRegistration } from './types';
+import ContextEnrichmentSkill from './builtins/ContextEnrichmentSkill';
+import IntentClassificationSkill from './builtins/IntentClassificationSkill';
 import { logger } from '../../utils/logger';
+import { getConfig } from '../../config';
+
+// Built-in skill constructors — registered by default, then overridable
+// by entries in configs/skills.yaml (enabled flag, triggers, priority).
+const BUILTIN_SKILL_CTORS: Array<new () => ISkill> = [
+  ContextEnrichmentSkill,
+  IntentClassificationSkill,
+];
 
 export class SkillManager {
   private skills: Map<string, SkillRegistration> = new Map();
   private skillDir: string;
   private autoLoad: boolean;
+  private configPath: string;
 
-  constructor(skillDir?: string, autoLoad?: boolean) {
+  constructor(skillDir?: string, autoLoad?: boolean, configPath?: string) {
     this.skillDir = skillDir || path.resolve(process.cwd(), 'src/core/skills/builtins');
     this.autoLoad = autoLoad ?? true;
+    // Default to the path declared in config.yaml (skills.configPath).
+    this.configPath = configPath || path.resolve(process.cwd(), getConfig().skills.configPath);
   }
 
   async initialize(): Promise<void> {
     if (this.autoLoad) {
-      await this.loadBuiltInSkills();
+      // 1. Register built-in skill classes (the actual implementations).
+      for (const Ctor of BUILTIN_SKILL_CTORS) {
+        try {
+          await this.register(new Ctor());
+        } catch (err) {
+          logger.error('Failed to register built-in skill:', err);
+        }
+      }
+      // 2. Merge declarative config (configs/skills.yaml) over the defaults —
+      //    lets ops disable a skill or tweak triggers without code changes.
+      await this.loadSkillsFromConfig(this.configPath);
     }
     logger.info('SkillManager initialized', { skillCount: this.skills.size });
   }
@@ -180,32 +203,9 @@ export class SkillManager {
   }
 
   private async loadBuiltInSkills(): Promise<void> {
-    try {
-      if (!fs.existsSync(this.skillDir)) {
-        logger.warn(`Skill directory not found: ${this.skillDir}`);
-        return;
-      }
-
-      const files = fs.readdirSync(this.skillDir).filter(f => f.endsWith('.ts') || f.endsWith('.js'));
-
-      for (const file of files) {
-        try {
-          const filePath = path.join(this.skillDir, file);
-          const skillModule = await import(filePath);
-
-          // Find the default export or the skill class
-          const SkillClass = skillModule.default || skillModule.Skill;
-          if (SkillClass) {
-            const skillInstance = new SkillClass();
-            await this.register(skillInstance);
-          }
-        } catch (error) {
-          logger.error(`Failed to load skill from ${file}:`, error);
-        }
-      }
-    } catch (error) {
-      logger.error('Failed to load built-in skills:', error);
-    }
+    // Kept for backwards compatibility — initialize() now registers built-ins
+    // via BUILTIN_SKILL_CTORS so the build (dist/) doesn't depend on src/.
+    logger.debug('loadBuiltInSkills() is deprecated; built-ins are registered in initialize()');
   }
 
   async loadSkillsFromConfig(configPath: string): Promise<void> {
@@ -216,20 +216,28 @@ export class SkillManager {
       }
 
       const content = fs.readFileSync(configPath, 'utf-8');
-      const config = yaml.load(content) as { skills: SkillConfig[] };
+      const parsed = yaml.load(content) as { skills?: Partial<SkillConfig>[] };
 
-      if (config.skills) {
-        for (const skillConfig of config.skills) {
-          // Try to load the skill module
-          const skill = this.getSkill(skillConfig.id);
-          if (skill) {
-            // Update config
-            const registration = this.skills.get(skillConfig.id);
-            if (registration) {
-              registration.config = skillConfig;
-            }
-          }
+      if (!parsed?.skills) return;
+
+      for (const entry of parsed.skills) {
+        if (!entry.id) continue;
+        const registration = this.skills.get(entry.id);
+        if (!registration) {
+          logger.warn(`Skill in config has no implementation registered: ${entry.id}`);
+          continue;
         }
+        // Merge declarative overrides onto the registration's config — keep
+        // implementation-supplied defaults for any field the yaml omits.
+        registration.config = {
+          ...registration.config,
+          ...entry,
+          id: registration.skill.id, // never let yaml change the id
+        };
+        logger.debug(`Skill config merged from yaml: ${entry.id}`, {
+          enabled: registration.config.enabled,
+          priority: registration.config.priority,
+        });
       }
     } catch (error) {
       logger.error('Failed to load skills from config:', error);

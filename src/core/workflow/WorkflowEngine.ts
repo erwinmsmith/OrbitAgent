@@ -104,18 +104,39 @@ export class WorkflowEngine implements IWorkflowEngine {
       throw new Error(`Workflow not found: ${workflowName}`);
     }
 
+    // Normalize context so stage handlers can safely call .map/.push on
+    // messages/variables/metadata without null-checks. Callers may pass only
+    // a partial context (e.g. { input: "hi" }) — we fill in the rest.
+    const normalizedContext: WorkflowExecutionContext = {
+      userId: context.userId || 'anonymous',
+      sessionId: context.sessionId || generateId(),
+      conversationId: context.conversationId,
+      messages: Array.isArray(context.messages) ? context.messages : [],
+      variables: {
+        ...workflow.variables,
+        ...(context.variables || {}),
+      },
+      metadata: context.metadata || {},
+    };
+
+    // If the caller passed an `input` string instead of full messages,
+    // synthesize a single user turn so the LLM stage has something to work on.
+    const rawInput = (context as any).input;
+    if (typeof rawInput === 'string' && normalizedContext.messages.length === 0) {
+      normalizedContext.messages.push({
+        id: generateId(),
+        role: 'user',
+        content: rawInput,
+        timestamp: now(),
+      });
+    }
+
     const execution: WorkflowExecution = {
       id: generateId(),
       workflowName: workflow.name,
       workflowVersion: workflow.version,
       status: 'pending',
-      context: {
-        ...context,
-        variables: {
-          ...workflow.variables,
-          ...context.variables,
-        },
-      },
+      context: normalizedContext,
       stageResults: new Map(),
       startedAt: now(),
     };
@@ -180,16 +201,23 @@ export class WorkflowEngine implements IWorkflowEngine {
         const stageResult: StageResult = {
           stageId: stage.id,
           success: result.success,
-          output: result.output,
-          error: result.error,
+          // Coerce stage output/metadata through a safe path — LLM adapters may
+          // attach raw axios responses to errors that contain circular refs;
+          // storing them as-is would later crash res.json() in the workflow
+          // route handler ("Converting circular structure to JSON").
+          output: this.safeSerialize(result.output),
+          error: typeof result.error === 'string' ? result.error : result.error ? String(result.error) : undefined,
           duration: Date.now() - startTime,
-          metadata: result.metadata,
+          metadata: this.safeSerialize(result.metadata),
         };
 
         execution.stageResults.set(stage.id, stageResult);
 
         if (!result.success && stage.onError === 'stop') {
-          throw new Error(result.error || 'Stage failed');
+          // Coerce — result.error from an LLM stage can be a raw axios error
+          // whose `.message` triggers circular-JSON when interpolated.
+          const errMsg = stageResult.error || 'Stage failed';
+          throw new Error(errMsg);
         }
 
         currentStageId = result.nextStage || stage.next || 'end';
@@ -220,25 +248,29 @@ export class WorkflowEngine implements IWorkflowEngine {
     nextStage?: string;
     metadata?: Record<string, any>;
   }> {
-    switch (stage.type) {
+    // Resolve ${env.VAR} / ${VAR} / {{VAR}} in stage fields once, then dispatch
+    // on the resolved stage. This is what lets `model: ${env.AGENT_DEFAULT_MODEL}`
+    // in a workflow YAML actually substitute the agent's configured model.
+    const resolvedStage = this.resolveStage(stage, execution.context.variables);
+    switch (resolvedStage.type) {
       case 'preprocessor':
       case 'postprocessor':
-        return this.executeSkillStage(stage, execution);
+        return this.executeSkillStage(resolvedStage, execution);
 
       case 'llm':
-        return this.executeLLMStage(stage, execution);
+        return this.executeLLMStage(resolvedStage, execution);
 
       case 'tool-call':
-        return this.executeToolStage(stage, execution);
+        return this.executeToolStage(resolvedStage, execution);
 
       case 'conditional':
-        return this.executeConditionalStage(stage, execution);
+        return this.executeConditionalStage(resolvedStage, execution);
 
       case 'end':
         return { success: true, output: null, nextStage: 'end' };
 
       default:
-        return { success: false, error: `Unknown stage type: ${stage.type}` };
+        return { success: false, error: `Unknown stage type: ${resolvedStage.type}` };
     }
   }
 
@@ -265,7 +297,14 @@ export class WorkflowEngine implements IWorkflowEngine {
         sessionId: execution.context.sessionId,
         conversationId: execution.context.conversationId,
         messages: execution.context.messages,
-        currentMessage: execution.context.messages[execution.context.messages.length - 1],
+        // Fallback to an empty user turn so skills that read .currentMessage
+        // don't crash on workflows started without any history.
+        currentMessage: execution.context.messages[execution.context.messages.length - 1] || {
+          id: generateId(),
+          role: 'user',
+          content: '',
+          timestamp: now(),
+        },
         variables: execution.context.variables,
         metadata: execution.context.metadata,
       });
@@ -299,9 +338,21 @@ export class WorkflowEngine implements IWorkflowEngine {
     }
 
     try {
+      // Resolve ${env.VAR} / ${defaultModel} in the model field — executeStage's
+      // resolveStage does this too, but executeLLMStage reads stage.model
+      // directly so we re-resolve here to be safe.
+      const llm = getLLMManager();
+      const resolveVars: Record<string, any> = {
+        defaultProvider: llm.getDefaultProvider(),
+        defaultModel: llm.getDefaultModel(),
+        ...execution.context.variables,
+      };
+      const resolvedModel = stage.model
+        ? this.resolveVariables(stage.model, resolveVars)
+        : undefined;
       const response = await llmManager.chat(messages, {
         ...options,
-        model: stage.model,
+        model: resolvedModel,
       });
 
       // Add response to context
@@ -319,7 +370,12 @@ export class WorkflowEngine implements IWorkflowEngine {
         metadata: { usage: response.usage },
       } as { success: boolean; output?: any; error?: string; nextStage?: string; metadata?: any };
     } catch (error: any) {
-      return { success: false, error: error.message };
+      // LLM adapters may throw axios errors with non-string `.message` that
+      // contain circular refs (request ↔ response). Force to a clean string.
+      const msg = typeof error?.message === 'string'
+        ? error.message
+        : (error instanceof Error ? error.toString() : 'LLM stage failed');
+      return { success: false, error: msg };
     }
   }
 
@@ -397,10 +453,36 @@ export class WorkflowEngine implements IWorkflowEngine {
 
   private resolveVariables(template: any, variables: Record<string, any>): any {
     if (typeof template === 'string') {
-      let result = template;
+      // Lookup order:
+      //   ${env.NAME}  → process.env.NAME
+      //   ${name}      → process.env.name (uppercase) if set, else variables[name]
+      //   $name        → same as ${name} (bare-dollar form)
+      //   {{name}}     → variables[name]
+      // ${name} / $name also fall back to env so authors don't have to type
+      // `env.` for UPPER_SNAKE_CASE names. Lowercase names (like `defaultModel`)
+      // only resolve through `variables` since env vars are conventionally
+      // uppercase.
+      const lookupVar = (name: string) => {
+        if (/^[A-Z][A-Z0-9_]*$/.test(name) && process.env[name] !== undefined) {
+          return process.env[name] as string;
+        }
+        return variables[name] !== undefined ? String(variables[name]) : undefined;
+      };
+      let result = template.replace(/\$\{env\.([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name) => {
+        return process.env[name] !== undefined ? (process.env[name] as string) : `\${env.${name}}`;
+      });
+      // Match any ${name} — env, camelCase, snake_case.
+      result = result.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (m, name) => {
+        const v = lookupVar(name);
+        return v === undefined ? m : v;
+      });
+      result = result.replace(/(?<![A-Za-z0-9_])\$([A-Z][A-Z0-9_]*)\b/g, (m, name) => {
+        const v = lookupVar(name);
+        return v === undefined ? m : v;
+      });
+      // Finally substitute runtime variables in {{var}} form.
       for (const [key, value] of Object.entries(variables)) {
-        result = result.replace(new RegExp(`\\$\\{${key}\\}`, 'g'), String(value));
-        result = result.replace(new RegExp(`\\$${key}`, 'g'), String(value));
+        result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), String(value));
       }
       return result;
     }
@@ -418,6 +500,54 @@ export class WorkflowEngine implements IWorkflowEngine {
     }
 
     return template;
+  }
+
+  /**
+   * Resolve placeholders in a stage's static fields (model, prompt, etc.) so
+   * workflow YAML can use `${env.VAR}` without callers having to plumb values
+   * through execution context. Falls through to existing per-stage variable
+   * resolution for content produced at runtime.
+   */
+  private resolveStage(stage: WorkflowStage, variables: Record<string, any>): WorkflowStage {
+    // Merge in framework-level variables (default model, etc.) so workflow
+    // YAMLs can reference `${defaultModel}` without authors having to plumb
+    // them through the execution context every time.
+    const llm = getLLMManager();
+    const mergedVars: Record<string, any> = {
+      defaultProvider: llm.getDefaultProvider(),
+      defaultModel: llm.getDefaultModel(),
+      ...variables,
+    };
+    const resolved: WorkflowStage = { ...stage };
+    if (stage.model)   resolved.model   = this.resolveVariables(stage.model, mergedVars);
+    if (stage.prompt)  resolved.prompt  = this.resolveVariables(stage.prompt, mergedVars);
+    if (stage.condition) resolved.condition = this.resolveVariables(stage.condition, mergedVars);
+    if (stage.tools)   resolved.tools   = (stage.tools || []).map(t => this.resolveVariables(t, mergedVars));
+    if (stage.skills)  resolved.skills  = (stage.skills || []).map(s => this.resolveVariables(s, mergedVars));
+    if (stage.branches) {
+      resolved.branches = stage.branches.map(b => ({
+        ...b,
+        condition: this.resolveVariables(b.condition, mergedVars),
+        then: this.resolveVariables(b.then, mergedVars),
+      }));
+    }
+    return resolved;
+  }
+
+  /**
+   * Strip non-serializable values (functions, circular refs) before storing in
+   * stageResults. LLM/HTTP responses can carry axios request/response objects
+   * with `req` ↔ `res` cycles that crash JSON.stringify downstream.
+   */
+  private safeSerialize<T>(value: T): T | undefined {
+    if (value === undefined || value === null) return value as any;
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch {
+      // Fall back to a primitive description so the field is still useful in
+      // /workflows/executions/:id rather than blowing up the whole response.
+      try { return String(value) as any; } catch { return undefined; }
+    }
   }
 
   private async loadWorkflowsFromDir(isReload = false): Promise<void> {

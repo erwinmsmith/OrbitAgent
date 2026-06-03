@@ -230,6 +230,7 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
       modelId: response.model,
       modelProvider: response.provider,
       promptTokens: response.usage.inputTokens,
+      cacheHitTokens: response.usage.cacheHitTokens,
       completionTokens: response.usage.outputTokens,
       totalTokens: response.usage.totalTokens,
       endpoint: '/chat',
@@ -318,6 +319,11 @@ router.post('/stream', async (req: Request, res: Response) => {
     ];
 
     let fullContent = '';
+    // Resolve effective model/provider up front so we record real values in
+    // token_usages even when the client omitted them. Done outside the chunk
+    // loop because StreamChunk doesn't carry model/provider.
+    const resolvedModel = model || llmManager.getDefaultModel();
+    const resolvedProvider = provider || llmManager.getProviderFromModel(resolvedModel);
 
     // Stream response
     for await (const chunk of llmManager.streamChat(llmMessages, { model })) {
@@ -338,8 +344,8 @@ router.post('/stream', async (req: Request, res: Response) => {
             sessionId: session,
             role: 'assistant',
             content: fullContent,
-            modelId: model,
-            modelProvider: provider,
+            modelId: resolvedModel,
+            modelProvider: resolvedProvider,
           }),
         ]);
 
@@ -349,9 +355,10 @@ router.post('/stream', async (req: Request, res: Response) => {
           tokenService.recordUsage({
             userId,
             sessionId: session,
-            modelId: model || 'unknown',
-            modelProvider: provider || 'unknown',
+            modelId: resolvedModel,
+            modelProvider: resolvedProvider,
             promptTokens: chunk.usage.inputTokens,
+            cacheHitTokens: chunk.usage.cacheHitTokens,
             completionTokens: chunk.usage.outputTokens,
             totalTokens: chunk.usage.totalTokens,
             endpoint: '/chat/stream',
@@ -365,6 +372,10 @@ router.post('/stream', async (req: Request, res: Response) => {
           type: 'done',
           content: fullContent,
           sessionId: session,
+          // Include the resolved model so SSE clients (e.g. the `orbit`
+          // CLI) can label the response without having to re-resolve.
+          model: resolvedModel,
+          provider: resolvedProvider,
           usage: chunk.usage,
         })}\n\n`);
 
