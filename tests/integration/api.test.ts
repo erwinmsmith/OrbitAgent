@@ -178,3 +178,74 @@ describe('workflow template variable resolution (remaining #2)', () => {
     expect(err).not.toMatch(/supported API model names are/i);
   });
 });
+
+describe('skill install flow (.md format)', () => {
+  const validSkill = `---
+id: integration-test-skill
+name: Integration Test Skill
+description: Installed at test time
+version: 1.0.0
+priority: 7
+enabled: true
+triggers:
+  - type: always
+---
+
+# Integration Test Skill
+
+Body.`;
+
+  afterAll(async () => {
+    // Best-effort cleanup so re-runs don't accumulate.
+    await request(app)
+      .delete('/api/v1/skills/install/integration-test-skill')
+      .set('Authorization', `Bearer ${devToken}`)
+      .catch(() => undefined);
+  });
+
+  it('installs from inline content and reload makes it visible', async () => {
+    const install = await request(app)
+      .post('/api/v1/skills/install')
+      .set('Authorization', `Bearer ${devToken}`)
+      .send({ source: 'inline', content: validSkill, filename: 'integration-test-skill.md' });
+    expect(install.status).toBe(200);
+    expect(install.body.data.id).toBe('integration-test-skill');
+    expect(install.body.data.filePath).toContain('integration-test-skill.md');
+
+    const reload = await request(app)
+      .post('/api/v1/skills/reload')
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(reload.status).toBe(200);
+    expect(reload.body.data.skillCount).toBeGreaterThanOrEqual(3);
+
+    const detail = await request(app)
+      .get('/api/v1/skills/integration-test-skill')
+      .set('Authorization', `Bearer ${devToken}`);
+    expect(detail.status).toBe(200);
+    expect(detail.body.data.id).toBe('integration-test-skill');
+    expect(detail.body.data.priority).toBe(7);
+  });
+
+  it('rejects malformed frontmatter with INVALID_SKILL', async () => {
+    const bad = `---
+id: malformed
+---
+body without required fields`;
+    const r = await request(app)
+      .post('/api/v1/skills/install')
+      .set('Authorization', `Bearer ${devToken}`)
+      .send({ source: 'inline', content: bad });
+    expect(r.status).toBe(400);
+    expect(r.body.error?.code).toBe('INVALID_SKILL');
+  });
+
+  it('rejects duplicate id with SKILL_ALREADY_INSTALLED', async () => {
+    const dup = validSkill.replace(/integration-test-skill/, 'integration-test-skill');
+    const r = await request(app)
+      .post('/api/v1/skills/install')
+      .set('Authorization', `Bearer ${devToken}`)
+      .send({ source: 'inline', content: dup });
+    expect(r.status).toBe(409);
+    expect(r.body.error?.code).toBe('SKILL_ALREADY_INSTALLED');
+  });
+});

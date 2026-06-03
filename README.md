@@ -406,6 +406,92 @@ orbit-agent/
 
 ---
 
+## Skills
+
+Skills are pre/post-processing hooks that run in priority order on every
+chat turn. They can inject variables into the LLM context, rewrite the
+user message, or halt the pipeline.
+
+### File format: `.md` (Anthropic-style)
+
+Each skill is a single Markdown file with YAML frontmatter:
+
+```markdown
+---
+id: timezone-greeter
+name: Timezone Greeter
+description: Stamps the current ISO time on context.variables
+version: 1.0.0
+priority: 3                    # higher runs first
+enabled: true
+triggers:
+  - type: always             # or keyword / regex / intent
+    pattern: ""               # keyword / regex body, or intent name
+---
+
+# Timezone Greeter
+
+The body is human-readable documentation. It is exposed on
+`GET /api/v1/skills/:id` (under `body`) and is intended to be passed
+to the LLM as a system message if you want the model to "know" the
+skill's purpose.
+```
+
+Required frontmatter fields: `id`, `name`, `description`, `version`,
+`priority`, `triggers` (at least one). `enabled` defaults to `true`.
+
+### Where skills live
+
+| Location | Purpose | Writable |
+|---|---|---|
+| `src/core/skills/builtins/*.md` | Bundled with the source tree (read-only at runtime) | no |
+| `~/.orbit/skills/*.md` | User-installed via CLI / HTTP API | yes |
+
+Scanned in that order on every `SkillManager.initialize()` (which the
+chat route calls via `POST /skills/reload` after an install/uninstall).
+A user-skill with the same id as a built-in overrides the built-in.
+
+### Adding a built-in
+
+1. Create `src/core/skills/builtins/your-skill.md` with valid frontmatter.
+2. If your skill needs to mutate the context (not just document itself),
+   add an entry in `BUILTIN_HANDLERS` inside
+   [src/core/skills/SkillManager.ts](src/core/skills/SkillManager.ts).
+3. Rebuild. The skill is live after the next server restart.
+
+### Install / uninstall via the CLI
+
+```bash
+orbit skill install ./my-skill.md          # local file
+orbit skill install https://example.com/skill.md   # http(s) URL
+orbit skill install --inline "$(cat ./skill.md)"    # raw text
+
+orbit skill show timezone-greeter         # dump the .md
+orbit skill installed                    # list user installs
+orbit skill reload                       # re-scan after manual file edits
+orbit skill uninstall timezone-greeter   # admin-only
+```
+
+### Install / uninstall via HTTP
+
+```bash
+# Install from a URL
+curl -X POST $API/skills/install -H "$H" -H "Content-Type: application/json" \
+  -d '{"source":"url","url":"https://example.com/skill.md"}'
+
+# Install from raw text
+curl -X POST $API/skills/install -H "$H" -H "Content-Type: application/json" \
+  -d "$(jq -n --arg body "$(cat my-skill.md)" '{source:"inline",content:$body,filename:"my-skill.md"}')"
+
+# Reload after manual edits
+curl -X POST $API/skills/reload -H "$H"
+
+# Uninstall (admin)
+curl -X DELETE $API/skills/install/<id> -H "$H"
+```
+
+---
+
 ## CLI (`orbit`)
 
 After `npm run build && npm link`, the `orbit` command is available on your PATH. The CLI is a **thin client over the existing backend REST API** — it does not re-implement any business logic, it just calls the same `/api/v1/*` endpoints the web UI / mobile app use.
