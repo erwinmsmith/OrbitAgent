@@ -406,14 +406,110 @@ orbit-agent/
 
 ---
 
+## CLI (`orbit`)
+
+After `npm run build && npm link`, the `orbit` command is available on your PATH. The CLI is a **thin client over the existing backend REST API** — it does not re-implement any business logic, it just calls the same `/api/v1/*` endpoints the web UI / mobile app use.
+
+### Install
+
+```bash
+npm install         # installs commander + chalk
+npm run build       # compiles src/cli → dist/cli/index.js (auto chmod +x)
+npm link            # registers the `orbit` shim on your PATH
+```
+
+### Start the backend first
+
+The CLI is a client only — the backend must be running:
+
+```bash
+# terminal A
+npm run dev
+```
+
+### Basic flow
+
+```bash
+# terminal B
+orbit login --dev                 # get a 30-day dev JWT, stored in ~/.orbit/token.json
+orbit whoami                      # dev@test.local
+
+orbit chat "hello"                # single turn
+orbit chat --stream "hello"       # SSE streaming
+orbit chat --session sess_abc "my name is erwin"
+orbit chat --session sess_abc "what's my name?"  # multi-turn (Redis history auto-injected)
+
+orbit history sess_abc --limit 5
+```
+
+### Command reference
+
+| Command | Backend endpoint | Description |
+|---|---|---|
+| `orbit` | — | Print base URL, home dir, and login state |
+| `orbit login [--dev] [--email E --password P]` | `POST /auth/login` or `POST /dev/token` | Persist a JWT; `--dev` skips the password |
+| `orbit logout` | — | Delete the stored token |
+| `orbit whoami` | — | Show the current login |
+| `orbit chat [msg...]` | `POST /chat` | Single turn; supports `--stream` `--session ID` `-m/--model` `-p/--provider` `--system TEXT`; reads stdin if no arg given |
+| `orbit history <sessionId> [-l N]` | `GET /chat/:sessionId` | Pull temporary chat history |
+| `orbit models [-p provider] [--ids]` | `GET /models` | Group by provider; `--ids` prints one ID per line for piping |
+| `orbit health` | `GET /models/health` | LLM provider health table |
+| `orbit switch <provider> <model>` | `POST /models/switch` | Change server default; also writes to local config |
+| `orbit defaults` | `GET /models/defaults/current` | Show server default |
+| `orbit skills` | `GET /skills` | Loaded skills |
+| `orbit tools` | `GET /tools` | Tools + JSON schema |
+| `orbit exec <name> -p <json>` | `POST /tools/execute` | Run a tool; e.g. `orbit exec filesystem -p '{"operation":"list","path":"."}'` |
+| `orbit workflows` | `GET /workflows` | List workflows |
+| `orbit workflow-run <name> [-v V] -c <json>` | `POST /workflows/:name/execute` | Execute a workflow |
+| `orbit usage` | `GET /usage/stats` | summary + byModel + daily |
+| `orbit pricing` | `GET /usage/pricing` | Pricing reference (includes `cacheHitPricePerM`) |
+| `orbit config show` | — | Print the current effective config |
+| `orbit config set-base <url>` | — | Change the backend URL (e.g. point at a LAN machine) |
+| `orbit config set-model <provider> <model>` | — | Persist a default model so you don't pass `-m` every time |
+
+### State files (`~/.orbit/`)
+
+| File | Contents | Permissions |
+|---|---|---|
+| `config.json` | `baseUrl`, `defaultProvider?`, `defaultModel?` | 0644 |
+| `token.json` | `{token, userId, email, isAdmin, savedAt}` | 0600 |
+
+### Environment variable overrides
+
+```bash
+ORBIT_HOME=/custom/path orbit login                          # default: ~/.orbit
+ORBIT_BASE_URL=http://x.y.z:3000/api/v1 orbit chat "hi"      # one-off backend
+ORBIT_MODEL=claude-3-5-sonnet-20241022 ORBIT_PROVIDER=anthropic orbit chat "hi"
+```
+
+### Adding a new command
+
+`src/cli/commands/foo.ts`:
+
+```ts
+import { Command } from 'commander';
+import { apiGet } from '../http';
+export function registerFoo(program: Command): void {
+  program.command('foo').action(async () => {
+    const data = await apiGet<any>('/some/endpoint');
+    console.log(data);
+  });
+}
+```
+
+Then import it at the top of [src/cli/index.ts](src/cli/index.ts) and call `registerFoo(program)` at the bottom. Build with `npm run build` and the new command is live.
+
+---
+
 ## Scripts
 
 ```bash
 npm run dev          # Development mode
-npm run build        # Build for production
+npm run build        # Build for production (also builds the orbit CLI)
 npm start            # Run production server
 npm test             # Run tests
 npm run typecheck    # TypeScript check
+npm run cli          # Run the CLI in dev mode via ts-node (no build needed)
 ```
 
 ---
