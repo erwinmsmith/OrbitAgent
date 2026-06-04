@@ -98,12 +98,32 @@ export function zhipuEmbedder(model: string = 'embedding-3', dim?: number): Embe
     const key = `${model}::${dim ?? 'd'}::${text}`;
     const cached = _zhipuCacheGet(key);
     if (cached) return cached;
+    // Embedding-3's per-input token limit is 3072. Approximate the
+    // text's token count as chars/2 (CJK chars are usually ~1-2
+    // tokens, ASCII ~0.3 tokens; chars/2 is a safe over-estimate
+    // for mixed content). If we exceed, truncate to 3000 chars
+    // (≈1500 tokens, well under the limit) — losing the tail is
+    // better than refusing to embed the doc at all.
+    const safeText = text.length > 3000 ? text.slice(0, 3000) : text;
     const body: Record<string, unknown> = {
       model,
-      input: [text],                  // Embedding-3 supports array input
+      input: [safeText],               // Embedding-3 supports array input
     };
     if (dim) body.dimensions = dim;
-    const r = await client.post<{ data: Array<{ embedding: number[] }> }>('/embeddings', body);
+    let r;
+    try {
+      r = await client.post<{ data: Array<{ embedding: number[] }> }>('/embeddings', body);
+    } catch (e: any) {
+      const status = e.response?.status;
+      const errBody = e.response?.data;
+      const preview = typeof errBody === 'string'
+        ? errBody.slice(0, 200)
+        : JSON.stringify(errBody).slice(0, 200);
+      throw new Error(
+        `zhipu embed failed (status=${status}, model=${model}, ` +
+        `textLen=${text.length}): ${preview}`,
+      );
+    }
     const vec = r.data.data?.[0]?.embedding;
     if (!vec || vec.length === 0) {
       throw new Error(`zhipuEmbedder: empty embedding response (model=${model})`);
@@ -193,6 +213,12 @@ export async function ingestDocument(opts: {
       : `user:${opts.ownerId}/${opts.filename}`;
 
   const title = deriveTitle(opts.body, opts.filename);
+  // Identify the embedder so future boots can detect when the
+  // stored chunks were produced by a different embedder (e.g.
+  // upgrading from hash-bow-64 to zhipu-2048 forces a full
+  // re-ingest). contentHash is set by the caller (bootstrap) so
+  // we don't hash twice.
+  const embedderKey = emb === hashEmbedder ? 'hash-bow-64' : 'remote-zhipu';
   const doc = await KnowledgeDocumentModel.findOneAndUpdate(
     { source },
     {
@@ -202,7 +228,7 @@ export async function ingestDocument(opts: {
         filename: opts.filename,
         title,
         body: opts.body,
-        embedderKey: 'hash-bow-64',
+        embedderKey,
       },
     },
     { new: true, upsert: true, setDefaultsOnInsert: true },
@@ -238,56 +264,150 @@ export async function ingestDocument(opts: {
 }
 
 /**
+ * Compute a stable short hash of a string. Used by the RAG
+ * bootstrap to skip re-embedding files whose body hasn't changed
+ * since the last successful run. SHA-256 hex would be 64 chars;
+ * we keep the first 16 chars of the hex digest which is plenty
+ * for collision avoidance on a corpus of <10K docs. */
+export function contentHash(s: string): string {
+  // Use Node's built-in crypto (sync, fast). Avoids a dep.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { createHash } = require('crypto') as typeof import('crypto');
+  return createHash('sha256').update(s, 'utf-8').digest('hex').slice(0, 16);
+}
+
+/**
  * One-time bootstrap: walk docs/base_knowledge/*.md and ingest each
- * as a system-scope document. Safe to call repeatedly.
+ * as a system-scope document. Content-hash cached: only files
+ * whose body hash has changed since the last successful run are
+ * re-embedded. Files that exist in the DB but no longer on disk
+ * are deleted (along with their chunks).
  *
- * If the configured embedder throws on its first call (e.g. ORBIT_EMBEDDER=
- * remote-zhipu but the ZHIPU_API_KEY is invalid/insufficient), the
- * bootstrap falls back to the hash embedder so the system corpus
- * still gets ingested. The /rag/search path will then also use
- * hashEmbedder for the same query — we don't want a half-loaded
- * index where some chunks are zhipu-embedded and others are
- * hash-embedded.
+ * If the configured embedder throws on its first call (e.g.
+ * ORBIT_EMBEDDER=remote-zhipu but the ZHIPU_API_KEY is invalid),
+ * the bootstrap falls back to the hash embedder so the system
+ * corpus still gets ingested. The /rag/search path will then
+ * also use hashEmbedder for the same query — we don't want a
+ * half-loaded index where some chunks are zhipu-embedded and
+ * others are hash-embedded.
  */
 export async function bootstrapSystemKnowledge(
   embedder: Embedder = resolveEmbedder(),
   rootDir: string = process.cwd(),
-): Promise<{ ingested: number; chunkCount: number; sourceCount: number }> {
+): Promise<{
+  ingested: number;
+  skipped: number;
+  deleted: number;
+  chunkCount: number;
+  sourceCount: number;
+  embedderKey: string;
+}> {
   const dir = path.join(rootDir, 'docs', 'base_knowledge');
   let entries: string[];
   try { entries = await fs.readdir(dir); }
-  catch (err: any) { if (err.code === 'ENOENT') return { ingested: 0, chunkCount: 0, sourceCount: 0 }; throw err; }
-  let ingested = 0;
-  let chunkCount = 0;
+  catch (err: any) { if (err.code === 'ENOENT') return { ingested: 0, skipped: 0, deleted: 0, chunkCount: 0, sourceCount: 0, embedderKey: 'none' }; throw err; }
+
   // Smoke-test the resolved embedder so we can fall back BEFORE
-  // we start a multi-minute ingest. If it errors, downgrade to
-  // hash for this call and for all future /rag/search calls.
+  // we start a multi-minute ingest.
   let activeEmbedder = embedder;
+  let probeError: string | null = null;
   try {
     const probeVec = await Promise.resolve(embedder('__orbit_probe__'));
     if (!Array.isArray(probeVec) || probeVec.length === 0) {
       throw new Error('embedder returned empty vector');
     }
   } catch (e: any) {
-    logger.warn(`bootstrapSystemKnowledge: embedder probe failed (${e.message}); falling back to hash embedder for this run + future /rag/search`);
+    probeError = e.message ?? String(e);
+    logger.warn(`bootstrapSystemKnowledge: embedder probe failed (${probeError}); falling back to hash embedder for this run + future /rag/search`);
     activeEmbedder = hashEmbedder;
   }
-  for (const f of entries) {
-    if (!f.endsWith('.md')) continue;
+  const embedderKey = activeEmbedder === hashEmbedder ? 'hash-bow-64' : 'remote-zhipu';
+
+  // Filter to .md files on disk.
+  const mdFiles = entries.filter((f) => f.endsWith('.md'));
+
+  // Index existing docs by source for fast lookup of stored
+  // contentHash.
+  const existing = await KnowledgeDocumentModel
+    .find({ scope: 'system', ownerId: null })
+    .select('source contentHash')
+    .lean();
+  const existingBySource = new Map<string, { contentHash?: string }>();
+  for (const d of existing) existingBySource.set(d.source, d);
+
+  let ingested = 0, skipped = 0, deleted = 0, chunkCount = 0;
+  const onDiskSources = new Set<string>();
+
+  for (const f of mdFiles) {
+    const source = `docs/base_knowledge/${f}`.replace(/^\/+/, '');
+    onDiskSources.add(source);
     const body = await fs.readFile(path.join(dir, f), 'utf-8');
-    const r = await ingestDocument({
-      scope: 'system',
-      ownerId: null,
-      filename: f,
-      body,
-      embedder: activeEmbedder,
-    });
-    if (r.chunkCount > 0) {
-      ingested++;
-      chunkCount += r.chunkCount;
+    const h = contentHash(body);
+    const prev = existingBySource.get(source);
+    if (prev && prev.contentHash === h) {
+      // Unchanged since last run — skip the (potentially
+      // expensive) embedder call entirely. We still record the
+      // current chunk count for the log.
+      const prevChunks = await KnowledgeChunkModel.countDocuments({ source });
+      skipped++;
+      chunkCount += prevChunks;
+      logger.debug(`bootstrap: skip ${source} (contentHash unchanged, ${prevChunks} chunks retained)`);
+      continue;
+    }
+    // Content changed (or first time) — ingest. ingestDocument
+    // upserts the doc and replaces its chunks in one transaction.
+    // One bad doc must NOT kill the whole bootstrap, so we wrap
+    // each ingest in its own try/catch and log + continue.
+    try {
+      const r = await ingestDocument({
+        scope: 'system',
+        ownerId: null,
+        filename: f,
+        body,
+        embedder: activeEmbedder,
+      });
+      if (r.chunkCount > 0) {
+        ingested++;
+        chunkCount += r.chunkCount;
+      }
+      // Stamp the contentHash on the doc so the NEXT run can skip.
+      await KnowledgeDocumentModel.updateOne(
+        { source },
+        { $set: { contentHash: h, embedderKey } },
+      );
+      logger.info(
+        `bootstrap: ${prev ? 're-ingested' : 'ingested'} ${source} ` +
+        `(${r.chunkCount} chunks, hash=${h})`,
+      );
+    } catch (e: any) {
+      // Roll back the partial upsert: delete the doc (and any
+      // chunks that ingestDocument inserted before throwing) so
+      // the next run sees a clean state and can retry.
+      await KnowledgeDocumentModel.deleteOne({ source });
+      await KnowledgeChunkModel.deleteMany({ source });
+      logger.error(
+        `bootstrap: failed to ingest ${source} — ${e.message ?? e}. ` +
+        `Doc and partial chunks were rolled back; will retry next boot.`,
+      );
     }
   }
-  return { ingested, chunkCount, sourceCount: ingested };
+
+  // Drop system-scope docs that no longer have a file on disk.
+  for (const d of existing) {
+    if (!onDiskSources.has(d.source)) {
+      await KnowledgeDocumentModel.deleteOne({ _id: d._id });
+      await KnowledgeChunkModel.deleteMany({ source: d.source });
+      deleted++;
+      logger.info(`bootstrap: deleted orphan ${d.source}`);
+    }
+  }
+
+  logger.info(
+    `RAG bootstrap done: ${ingested} ingested, ${skipped} skipped ` +
+    `(contentHash cache), ${deleted} deleted; embedder=${embedderKey}` +
+    (probeError ? `; probe failed: ${probeError}` : ''),
+  );
+  return { ingested, skipped, deleted, chunkCount, sourceCount: mdFiles.length, embedderKey };
 }
 
 /** Delete a user-uploaded document (or any document if admin). */

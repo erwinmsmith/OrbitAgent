@@ -142,7 +142,10 @@ class Application {
     // is missing (e.g. some Docker images) so boot doesn't fail.
     try {
       const r = await bootstrapSystemKnowledge();
-      logger.info(`RAG bootstrap: ${r.chunkCount} chunks from ${r.sourceCount} sources`);
+      logger.info(
+        `RAG bootstrap: ${r.ingested} ingested, ${r.skipped} skipped, ` +
+        `${r.deleted} deleted; ${r.chunkCount} chunks total; embedder=${r.embedderKey}`,
+      );
     } catch (e: any) {
       logger.warn(`RAG bootstrap failed (continuing without it): ${e.message ?? e}`);
     }

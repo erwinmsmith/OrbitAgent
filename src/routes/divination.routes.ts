@@ -41,6 +41,7 @@ import { assembleChart, type AssembleInput } from '../liuyao/skills/chartAssembl
 import { runAnalysisAgent } from '../liuyao/agent/analysisAgent';
 import {
   search, ragStats, ingestDocument, deleteDocument, bootstrapSystemKnowledge,
+  resolveEmbedder,
 } from '../liuyao/rag/index';
 import {
   saveChart, getChart, listChartKeys, getLatestChart,
@@ -202,6 +203,11 @@ router.post('/rag/upload', asyncHandler(async (req: Request, res: Response) => {
       ownerId,
       filename,
       body: docBody,
+      // Use the same active embedder (zhipu / hash) the bootstrap
+      // used for system docs — otherwise user-scope chunks end up
+      // 64-dim (hash) while system chunks are 2048-dim (zhipu),
+      // and the search-time cosine similarity becomes meaningless.
+      embedder: resolveEmbedder(),
     });
     res.json({ success: true, data: { ...r, scope, ownerId } });
   } catch (err: any) {
