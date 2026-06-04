@@ -92,6 +92,8 @@ router.post('/chart', asyncHandler(async (req: Request, res: Response) => {
     dayStem: body.dayStem,
     dayBranch: body.dayBranch,
     monthBranch: body.monthBranch,
+    hourStem: body.hourStem,
+    hourBranch: body.hourBranch,
     datetime: body.datetime,
     timezone: body.timezone,
   };

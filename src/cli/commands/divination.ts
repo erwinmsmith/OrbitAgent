@@ -32,12 +32,14 @@ export function registerDivination(program: Command): void {
     });
 
   cmd.command('chart <bits...>')
-    .description('Run the full chart assembler AND persist it to the session store. --session is REQUIRED so the agent can read it back later. By default the positional args are 6 × 0/1 (static yin/yang). Pass --yao to switch to 6 × 6/7/8/9 (supports moving lines 6 and 9).')
+    .description('Run the full chart assembler AND persist it to the session store. --session is REQUIRED so the agent can read it back later. By default the positional args are 6 × 0/1 (static yin/yang). Pass --yao to switch to 6 × 6/7/8/9 (supports moving lines 6 and 9). If you don\'t pass --day-stem / --day-branch, they are auto-derived from --datetime (or "now" if omitted) using lunar-typescript.')
     .option('-q, --question <q>', 'Question text (used for 用神 + analysis)')
     .option('--question-type <t>', 'Override question type (e.g. 求财, 求事业)')
-    .option('--day-stem <s>', '日干 (e.g. 甲) — needed for 六神 + 旬空')
-    .option('--day-branch <b>', '日支 (e.g. 子) — needed for 旬空 + 冲合')
+    .option('--day-stem <s>', '日干 (e.g. 甲) — overrides the auto-derived value')
+    .option('--day-branch <b>', '日支 (e.g. 子) — overrides the auto-derived value')
     .option('--month-branch <b>', '月支 (e.g. 寅) — needed for 月破 + 旺衰')
+    .option('--datetime <iso>', 'ISO-8601 datetime string (e.g. 2026-06-04T14:00:00+08:00). Defaults to "now" if omitted.')
+    .option('--timezone <tz>', 'IANA timezone for the calendar skill (e.g. Asia/Shanghai). Defaults to system local.')
     .option('-s, --session <id>', 'Session id under which to store the chart (auto-generated if omitted; pass the same value to `orbit chat` later)')
     .option('--chart-key <k>', 'Logical name for this chart within the session (default: "default")', 'default')
     .option('--yao', 'Interpret the 6 positional args as 6/7/8/9 爻值 (with moving lines) instead of 0/1 bits.', false)
@@ -56,12 +58,24 @@ export function registerDivination(program: Command): void {
       if (opts.dayStem) body.dayStem = opts.dayStem;
       if (opts.dayBranch) body.dayBranch = opts.dayBranch;
       if (opts.monthBranch) body.monthBranch = opts.monthBranch;
+      if (opts.datetime) body.datetime = opts.datetime;
+      if (opts.timezone) body.timezone = opts.timezone;
       try {
         const data = await apiPost<any>('/divination/chart', body);
         // Print the warnings prominently if present.
         if (data.warnings?.length) {
           console.log(chalk.yellow(`⚠ warnings:`));
           for (const w of data.warnings) console.log(chalk.yellow(`  - ${w}`));
+          console.log();
+        }
+        // Time block (if calendar skill ran) — show the 4 pillars
+        // and xunkong that were auto-derived, so the user can verify
+        // the engine used the right date.
+        if (data.time?.yearStem) {
+          console.log(`  ${chalk.gray('time:')}  ${chalk.cyan(`${data.time.yearStem}${data.time.yearBranch}年 / ${data.time.monthStem}${data.time.monthBranch}月 / ${data.time.dayStem}${data.time.dayBranch}日 / ${data.time.hourStem}${data.time.hourBranch}时`)}`);
+          if (data.time.xunkong?.length) {
+            console.log(`         ${chalk.gray('旬空:')} ${chalk.yellow(data.time.xunkong.join('、'))}    ${chalk.gray('节气:')} ${data.time.solarTerm || '?'}`);
+          }
           console.log();
         }
         // Strip the ChartResult noise and just print the essentials.

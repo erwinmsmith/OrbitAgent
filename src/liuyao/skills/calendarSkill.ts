@@ -1,25 +1,15 @@
 /**
  * 5.7 Calendar Skill — convert a solar datetime to the 4 pillars
- * (year/month/day/hour) + xunkong.
+ * (year/month/day/hour) + xunkong + 节气.
  *
- * Status: NOT YET FILLED IN. The full implementation needs
- *   - a 24 节气 → 公历 date algorithm
- *   - a 公历 date → 60 甲子 index algorithm
- *   - the xunkong lookup (§11)
- *
- * All of these are listed in docs/liuyao/KNOWLEDGE_NEEDED.md. Until
- * they're filled in, the user can pass dayStem/dayBranch/etc. manually
- * via the API (calendar-free path).
+ * Backed by `lunar-typescript` (see constants/calendar.ts). The lib
+ * ships with the full 1900-2099 节气表 baked in, so the skill is
+ * now production-ready for any solar datetime in that window.
  */
 import type { CalendarSkillInput, CalendarSkillOutput } from '../types/skill';
-import { deriveCalendarPillars, SOLAR_TERM_MONTH_BRANCH, todo } from '../constants/calendar';
-import { xunkongForDayStem, todo as todoXunkong } from '../constants/xunkong';
-import { yongshenFor } from '../constants/yongshen';
+import { deriveCalendarPillars } from '../constants/calendar';
 
 export function calendarSkill(input: CalendarSkillInput): CalendarSkillOutput {
-  // We need an algorithm to convert a solar datetime to 4 pillars. Until
-  // that lands (§13), we accept that this function throws. Callers in
-  // MVP mode can pass dayStem/dayBranch directly.
   let date: Date;
   try {
     date = new Date(input.datetime);
@@ -28,18 +18,17 @@ export function calendarSkill(input: CalendarSkillInput): CalendarSkillOutput {
     throw new Error(`calendarSkill: invalid datetime string: ${input.datetime}`);
   }
 
-  try {
-    deriveCalendarPillars(date, input.timezone);
-  } catch (e) {
-    todo('13', 'deriveCalendarPillars — solar datetime → 4 pillars + xunkong');
-  }
-
-  // Below unreachable until the algorithm is supplied, but satisfies
-  // the declared return type.
+  const p = deriveCalendarPillars(date, input.timezone);
   return {
-    yearStem: '甲', yearBranch: '子',
-    monthStem: '甲', monthBranch: SOLAR_TERM_MONTH_BRANCH[0]!,
-    dayStem: '甲', dayBranch: '子',
-    xunkong: ['戌', '亥'] as any,
+    yearStem: p.yearStem,
+    yearBranch: p.yearBranch,
+    monthStem: p.monthStem,
+    monthBranch: p.monthBranch,
+    dayStem: p.dayStem,
+    dayBranch: p.dayBranch,
+    hourStem: p.hourStem,
+    hourBranch: p.hourBranch,
+    xunkong: p.xunkong,
+    solarTerm: p.solarTerm,
   };
 }

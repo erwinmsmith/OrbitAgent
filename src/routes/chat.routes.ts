@@ -195,10 +195,28 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
   const stored = await getChart(userId, session).catch(() => null);
   if (stored) {
     const lines = (stored.chart.lines || []) as any[];
+    // Time block first — the agent needs the 4 pillars (year/month/day/hour)
+    // + xunkong + solarTerm to reason about 旺衰/冲合/动爻回头生克 and
+    // to disambiguate things like "this 兄弟 is born today" vs
+    // "this 兄弟 is born in 甲午 year".
+    const t = stored.chart.time;
+    const timeBlock = t ? [
+      '【排盘时间（来自 server-side ChartStore）】',
+      t.datetime ? `起卦时间：${t.datetime}${t.timezone ? ` (${t.timezone})` : ''}` : null,
+      t.solarTerm ? `节气：${t.solarTerm}` : null,
+      [
+        t.yearStem && t.yearBranch ? `${t.yearStem}${t.yearBranch}年` : null,
+        t.monthStem && t.monthBranch ? `${t.monthStem}${t.monthBranch}月` : null,
+        t.dayStem && t.dayBranch ? `${t.dayStem}${t.dayBranch}日` : null,
+        t.hourStem && t.hourBranch ? `${t.hourStem}${t.hourBranch}时` : null,
+      ].filter(Boolean).join(' / '),
+      t.xunkong?.length ? `旬空：${t.xunkong.join('、')}` : null,
+    ].filter(Boolean).join('\n') : null;
     const summary = [
       '【已排盘（来自 server-side ChartStore）】',
       stored.chart.question ? `用户问题：${stored.chart.question}` : null,
       stored.chart.questionType ? `问题类型：${stored.chart.questionType}` : null,
+      timeBlock,
       `本卦：${stored.chart.originalHexagram?.name ?? '?'}（属${stored.chart.originalHexagram?.palace ?? '?'}宫，${stored.chart.originalHexagram?.element ?? '?'}）`,
       `变卦：${stored.chart.changedHexagram?.name ?? '?'}`,
       `动爻：${(stored.chart.movingLines || []).join('、') || '无'}`,

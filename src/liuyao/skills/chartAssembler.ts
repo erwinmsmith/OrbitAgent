@@ -17,11 +17,12 @@ import { branchRelationSkill } from './branchRelationSkill';
 import { transformationSkill } from './transformationSkill';
 import { yongshenSkill } from './yongshenSkill';
 import { strengthSkill } from './strengthSkill';
+import { calendarSkill } from './calendarSkill';
 import type {
   CastSkillOutput, HexagramSkillOutputT, PalaceSkillOutput, NaJiaSkillOutput,
   SixRelativeSkillOutput, SixGodSkillOutput, VoidSkillOutput,
   BranchRelationSkillOutput, TransformationSkillOutput, YongshenSkillOutput,
-  StrengthSkillOutput,
+  StrengthSkillOutput, CalendarSkillOutput,
 } from '../types/skill';
 import type { ChartResult, ChartLine, HexagramMeta } from '../types/chart';
 import type { QuestionType, EarthlyBranch, HeavenlyStem, LinePosition, WuXing, SixRelative, SixGod, YinYangBit } from '../types/basic';
@@ -38,10 +39,16 @@ export interface AssembleInput {
   /** Six raw 爻值 (6/7/8/9), one per line, bottom-to-top. Use this
    *  to feed moving lines (6/9) instead of the static-only bits mode. */
   yaoValues?: [6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8 | 9];
-  /** Optional — pass when available. The MVP path requires this. */
+  /** Optional — pass when available. The MVP path requires this.
+   *  If omitted AND `datetime` is supplied, derived from `datetime`. */
   dayStem?: HeavenlyStem;
   dayBranch?: EarthlyBranch;
   monthBranch?: EarthlyBranch;
+  hourStem?: HeavenlyStem;
+  hourBranch?: EarthlyBranch;
+  /** ISO-8601 datetime string. If supplied + timezone, the calendar
+   *  skill derives the 4 pillars automatically. Defaults to "now" if
+   *  no dayStem is passed. */
   datetime?: string;
   timezone?: string;
 }
@@ -49,6 +56,32 @@ export interface AssembleInput {
 /** Run the 13 skills in order, building a ChartResult. */
 export function assembleChart(input: AssembleInput): ChartResult {
   const warnings: string[] = [];
+
+  // Step 2 — Calendar (auto-derive dayStem/dayBranch/etc. when the
+  // caller didn't supply them but did supply a datetime, or didn't
+  // supply anything at all → use "now"). The user can still override
+  // any field by passing it explicitly.
+  let calendar: CalendarSkillOutput | null = null;
+  if (!input.dayStem || !input.dayBranch) {
+    const dt = input.datetime ? new Date(input.datetime) : new Date();
+    if (isNaN(dt.getTime())) {
+      warnings.push(`calendarSkill: invalid datetime "${input.datetime}", falling back to now`);
+    } else {
+      try {
+        calendar = calendarSkill({ datetime: dt.toISOString(), timezone: input.timezone ?? '' });
+        if (!input.dayStem)   input.dayStem   = calendar.dayStem;
+        if (!input.dayBranch) input.dayBranch = calendar.dayBranch;
+        if (!input.monthBranch) input.monthBranch = calendar.monthBranch;
+        if (!input.hourStem)    input.hourStem  = calendar.hourStem;
+        if (!input.hourBranch)  input.hourBranch = calendar.hourBranch;
+      } catch (e: any) {
+        warnings.push(`calendarSkill: ${e.message ?? e}`);
+      }
+    }
+  }
+  if (!input.dayStem || !input.dayBranch) {
+    warnings.push('dayStem/dayBranch not derived (no datetime, no manual input) — sixGodSkill / voidSkill skipped');
+  }
 
   // Step 3 — Casting
   const cast: CastSkillOutput = castSkill({
@@ -253,7 +286,25 @@ export function assembleChart(input: AssembleInput): ChartResult {
     question: input.question,
     questionType: input.questionType,
     input: { type: 'coins', raw: input.yaoValues ?? input.bits },
-    time: input.datetime ? { datetime: input.datetime, timezone: input.timezone } : undefined,
+    // Time block: populated when we ran the calendar skill (which
+    // derives the 4 pillars from a solar datetime). When the caller
+    // passed dayStem/dayBranch manually but no datetime, we still
+    // fill in year/month from the current time + day from the
+    // caller's input.
+    time: calendar ? {
+      datetime: input.datetime ?? new Date().toISOString(),
+      timezone: input.timezone,
+      yearStem:   calendar.yearStem,
+      yearBranch: calendar.yearBranch,
+      monthStem:  calendar.monthStem,
+      monthBranch: calendar.monthBranch,
+      dayStem:    calendar.dayStem,
+      dayBranch:  calendar.dayBranch,
+      hourStem:   calendar.hourStem,
+      hourBranch: calendar.hourBranch,
+      xunkong:    calendar.xunkong,
+      solarTerm:  calendar.solarTerm,
+    } : (input.datetime ? { datetime: input.datetime, timezone: input.timezone } : undefined),
     originalHexagram: (hex.originalHexagram ?? {
       id: 0, name: '?', upper: '乾', lower: '乾', palace: '乾宫',
       palaceType: '本宫', element: '金',

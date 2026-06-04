@@ -13,6 +13,7 @@ import { initializeSkillManager, destroySkillManager } from './core/skills/Skill
 import { initializeToolManager, destroyToolManager } from './core/tools/ToolManager';
 import { initializeWorkflowEngine, destroyWorkflowEngine } from './core/workflow/WorkflowEngine';
 import { initializePromptManager, destroyPromptManager } from './core/prompts/PromptManager';
+import { bootstrapSystemKnowledge } from './liuyao/rag';
 import { getTemporaryMemory } from './core/memory/TemporaryMemory';
 import { getPermanentMemory } from './core/memory/PermanentMemory';
 import { initDevTestUser, initDevAdminUser, getDevTestToken } from './services/DevAuth';
@@ -133,6 +134,18 @@ class Application {
 
     // Initialize Prompt Manager
     await initializePromptManager();
+
+    // Bootstrap the 六爻 RAG system corpus. Walks
+    // docs/base_knowledge/*.md and ingests each as a system-scope
+    // document. Idempotent — existing chunks are replaced, not
+    // duplicated. Skip silently in environments where the docs dir
+    // is missing (e.g. some Docker images) so boot doesn't fail.
+    try {
+      const r = await bootstrapSystemKnowledge();
+      logger.info(`RAG bootstrap: ${r.chunkCount} chunks from ${r.sourceCount} sources`);
+    } catch (e: any) {
+      logger.warn(`RAG bootstrap failed (continuing without it): ${e.message ?? e}`);
+    }
 
     logger.info('All services initialized');
   }

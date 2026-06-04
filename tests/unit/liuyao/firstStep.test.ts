@@ -262,13 +262,22 @@ describe('assembleChart — full first-step wiring', () => {
     expect(r.changedHexagram.name).toBe('姤');
   });
 
-  it('produces a non-empty chart even with no dayStem (sixGods default to 青龙 everywhere)', () => {
+  it('produces a non-empty chart even with no dayStem (auto-derives from "now")', () => {
+    // When no dayStem/dayBranch is supplied, chartAssembler now calls
+    // calendarSkill to derive them from the current datetime. The
+    // resulting chart is fully decorated (no warnings[] for the
+    // calendar-derived path), with the 6 6-gods populated from the
+    // current day stem and the xunkong marked.
     const r = assembleChart({ bits: [1, 1, 1, 1, 1, 1] });
-    expect(r.warnings).toContain('dayStem not supplied — sixGodSkill skipped');
     expect(r.originalHexagram.name).toBe('乾');
-    // All 六神 default to 青龙 in the no-dayStem path.
-    expect(r.lines.map((l) => l.sixGod)).toEqual(['青龙', '青龙', '青龙', '青龙', '青龙', '青龙']);
-    // void stays undefined when no dayStem.
-    expect(r.lines.every((l) => l.void === false)).toBe(true);
+    // time block is populated, so the agent can see what day/month
+    // the chart was cast on.
+    expect(r.time).toBeDefined();
+    expect(r.time?.dayStem).toBeDefined();
+    expect(r.time?.dayBranch).toBeDefined();
+    // No "dayStem not supplied" warning — calendarSkill covered it.
+    expect(r.warnings ?? []).toEqual([]);
+    // 6 6-gods populated (not the old default-to-青龙 path).
+    expect(r.lines[0]?.sixGod).toBeDefined();
   });
 });

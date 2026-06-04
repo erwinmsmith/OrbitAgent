@@ -162,12 +162,13 @@ export async function ingestDocument(opts: {
 export async function bootstrapSystemKnowledge(
   embedder: Embedder = hashEmbedder,
   rootDir: string = process.cwd(),
-): Promise<{ ingested: number }> {
+): Promise<{ ingested: number; chunkCount: number; sourceCount: number }> {
   const dir = path.join(rootDir, 'docs', 'base_knowledge');
   let entries: string[];
   try { entries = await fs.readdir(dir); }
-  catch (err: any) { if (err.code === 'ENOENT') return { ingested: 0 }; throw err; }
+  catch (err: any) { if (err.code === 'ENOENT') return { ingested: 0, chunkCount: 0, sourceCount: 0 }; throw err; }
   let ingested = 0;
+  let chunkCount = 0;
   for (const f of entries) {
     if (!f.endsWith('.md')) continue;
     const body = await fs.readFile(path.join(dir, f), 'utf-8');
@@ -178,9 +179,12 @@ export async function bootstrapSystemKnowledge(
       body,
       embedder,
     });
-    if (r.chunkCount > 0) ingested++;
+    if (r.chunkCount > 0) {
+      ingested++;
+      chunkCount += r.chunkCount;
+    }
   }
-  return { ingested };
+  return { ingested, chunkCount, sourceCount: ingested };
 }
 
 /** Delete a user-uploaded document (or any document if admin). */
