@@ -12,13 +12,17 @@
  *   - Searches union system-scope chunks and the requesting user's
  *     own chunks. Other users' private uploads are NEVER included.
  *
- * The embedding strategy is pluggable — drop in a real provider
- * (OpenAI, SiliconFlow, bge-m3, …) by setting ORBIT_EMBEDDER at
- * startup. The current default is a deterministic 64-dim BoW hash
- * so the MVP runs without an external API key.
+ * The embedding strategy is pluggable via the `ORBIT_EMBEDDER` env
+ * var. Current options:
+ *   - `hash` (default) — deterministic 64-dim BoW hash. Works
+ *     without an external API key; quality is mediocre.
+ *   - `remote-zhipu` — 智谱 Embedding-3 via the OpenAI-compatible
+ *     /embeddings endpoint at open.bigmodel.cn. Costs 0.5元/Mtok.
+ *     Set `ZHIPU_API_KEY` to use.
  */
 import fs from 'fs/promises';
 import path from 'path';
+import axios from 'axios';
 import { KnowledgeDocumentModel, type KnowledgeScope } from '../../models/KnowledgeDocument';
 import { KnowledgeChunkModel } from '../../models/KnowledgeChunk';
 import { logger } from '../../utils/logger';
@@ -48,6 +52,84 @@ export function hashEmbedder(text: string): number[] {
   }
   const norm = Math.sqrt(v.reduce((a, b) => a + b * b, 0)) || 1;
   return v.map((x) => x / norm);
+}
+
+/**
+ * 智谱 AI Embedding-3 adapter. Calls
+ * `POST https://open.bigmodel.cn/api/paas/v4/embeddings` with the
+ * OpenAI-compatible body shape. Honors an in-process LRU cache so
+ * repeated searches for the same query don't re-charge the API.
+ *
+ *   env: ZHIPU_API_KEY            (required)
+ *        ORBIT_EMBEDDER=remote-zhipu
+ *        ZHIPU_EMBED_MODEL=embedding-3   (default)
+ *        ZHIPU_EMBED_DIM=2048             (default — also accepts 1024/512/256)
+ */
+const _zhipuEmbedCache = new Map<string, number[]>();
+const _ZHIPU_CACHE_MAX = 1024;
+
+function _zhipuCacheGet(key: string): number[] | undefined {
+  return _zhipuEmbedCache.get(key);
+}
+function _zhipuCacheSet(key: string, vec: number[]): void {
+  if (_zhipuEmbedCache.size >= _ZHIPU_CACHE_MAX) {
+    // Drop the oldest insertion (Map iteration is insertion-ordered).
+    const first = _zhipuEmbedCache.keys().next().value;
+    if (first !== undefined) _zhipuEmbedCache.delete(first);
+  }
+  _zhipuEmbedCache.set(key, vec);
+}
+
+export function zhipuEmbedder(model: string = 'embedding-3', dim?: number): Embedder {
+  const apiKey = process.env.ZHIPU_API_KEY ?? '';
+  if (!apiKey) {
+    throw new Error('zhipuEmbedder: ZHIPU_API_KEY is not set');
+  }
+  const baseUrl = process.env.ZHIPU_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4';
+  const client = axios.create({
+    baseURL: baseUrl,
+    timeout: 30_000,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+  });
+  return async (text: string): Promise<number[]> => {
+    const key = `${model}::${dim ?? 'd'}::${text}`;
+    const cached = _zhipuCacheGet(key);
+    if (cached) return cached;
+    const body: Record<string, unknown> = {
+      model,
+      input: [text],                  // Embedding-3 supports array input
+    };
+    if (dim) body.dimensions = dim;
+    const r = await client.post<{ data: Array<{ embedding: number[] }> }>('/embeddings', body);
+    const vec = r.data.data?.[0]?.embedding;
+    if (!vec || vec.length === 0) {
+      throw new Error(`zhipuEmbedder: empty embedding response (model=${model})`);
+    }
+    _zhipuCacheSet(key, vec);
+    return vec;
+  };
+}
+
+/** Resolve the active embedder from env. Used by bootstrap + search
+ *  to keep them in lock-step (a chunk embedded with hash but queried
+ *  with zhipu produces a zero-similarity result). */
+export function resolveEmbedder(): Embedder {
+  const choice = (process.env.ORBIT_EMBEDDER || 'hash').toLowerCase();
+  if (choice === 'remote-zhipu' || choice === 'zhipu') {
+    const model = process.env.ZHIPU_EMBED_MODEL || 'embedding-3';
+    const dimStr = process.env.ZHIPU_EMBED_DIM;
+    const dim = dimStr ? parseInt(dimStr, 10) : undefined;
+    try {
+      return zhipuEmbedder(model, dim);
+    } catch (e: any) {
+      logger.warn(`Failed to init zhipu embedder (${e.message}); falling back to hash embedder`);
+      return hashEmbedder;
+    }
+  }
+  return hashEmbedder;
 }
 
 export function cosineSimilarity(a: number[], b: number[]): number {
@@ -158,9 +240,17 @@ export async function ingestDocument(opts: {
 /**
  * One-time bootstrap: walk docs/base_knowledge/*.md and ingest each
  * as a system-scope document. Safe to call repeatedly.
+ *
+ * If the configured embedder throws on its first call (e.g. ORBIT_EMBEDDER=
+ * remote-zhipu but the ZHIPU_API_KEY is invalid/insufficient), the
+ * bootstrap falls back to the hash embedder so the system corpus
+ * still gets ingested. The /rag/search path will then also use
+ * hashEmbedder for the same query — we don't want a half-loaded
+ * index where some chunks are zhipu-embedded and others are
+ * hash-embedded.
  */
 export async function bootstrapSystemKnowledge(
-  embedder: Embedder = hashEmbedder,
+  embedder: Embedder = resolveEmbedder(),
   rootDir: string = process.cwd(),
 ): Promise<{ ingested: number; chunkCount: number; sourceCount: number }> {
   const dir = path.join(rootDir, 'docs', 'base_knowledge');
@@ -169,6 +259,19 @@ export async function bootstrapSystemKnowledge(
   catch (err: any) { if (err.code === 'ENOENT') return { ingested: 0, chunkCount: 0, sourceCount: 0 }; throw err; }
   let ingested = 0;
   let chunkCount = 0;
+  // Smoke-test the resolved embedder so we can fall back BEFORE
+  // we start a multi-minute ingest. If it errors, downgrade to
+  // hash for this call and for all future /rag/search calls.
+  let activeEmbedder = embedder;
+  try {
+    const probeVec = await Promise.resolve(embedder('__orbit_probe__'));
+    if (!Array.isArray(probeVec) || probeVec.length === 0) {
+      throw new Error('embedder returned empty vector');
+    }
+  } catch (e: any) {
+    logger.warn(`bootstrapSystemKnowledge: embedder probe failed (${e.message}); falling back to hash embedder for this run + future /rag/search`);
+    activeEmbedder = hashEmbedder;
+  }
   for (const f of entries) {
     if (!f.endsWith('.md')) continue;
     const body = await fs.readFile(path.join(dir, f), 'utf-8');
@@ -177,7 +280,7 @@ export async function bootstrapSystemKnowledge(
       ownerId: null,
       filename: f,
       body,
-      embedder,
+      embedder: activeEmbedder,
     });
     if (r.chunkCount > 0) {
       ingested++;
@@ -287,7 +390,13 @@ export async function search(
 
   if (chunks.length === 0) return [];
 
-  const qv = hashEmbedder(query);
+  let qv: number[];
+  try {
+    qv = await Promise.resolve(resolveEmbedder()(query));
+  } catch (e: any) {
+    logger.warn(`rag.search: embedder failed (${e.message}); falling back to hash for this query`);
+    qv = hashEmbedder(query);
+  }
   const scored = chunks.map((c: any) => {
     const chunk: RagChunk = {
       id: `${c.source}#${c._id ?? ''}`,

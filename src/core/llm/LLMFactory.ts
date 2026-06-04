@@ -68,6 +68,23 @@ const COMPATIBLE_PROVIDERS: Record<string, CompatibleProviderConfig> = {
     ],
     defaultModel: 'llama-3.1-sonar-large-128k-online',
   },
+  zhipu: {
+    name: 'Zhipu AI (智谱)',
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    models: [
+      // GLM-4 系列
+      { id: 'glm-4-plus', name: 'GLM-4 Plus', description: 'Strong reasoning + 128K context' },
+      { id: 'glm-4-air-250414', name: 'GLM-4 Air', description: 'Fast and cheap' },
+      { id: 'glm-4-flash-250414', name: 'GLM-4 Flash', description: 'Free tier; lowest latency' },
+      // Embedding-3 系列 — used for RAG. RAG uses its own adapter, but
+      // we list it here for /models + the CLI's "supported providers"
+      // output.
+      { id: 'embedding-3', name: 'Embedding-3 (2048d)', description: '智谱 3rd-gen text vector, 2048d, 0.5元/Mtok' },
+      { id: 'embedding-3-512', name: 'Embedding-3 (512d)', description: '智谱 Embedding-3, 512d' },
+      { id: 'embedding-3-256', name: 'Embedding-3 (256d)', description: '智谱 Embedding-3, 256d' },
+    ],
+    defaultModel: 'glm-4-flash-250414',
+  },
 };
 
 export class LLMManager {
