@@ -92,7 +92,10 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
   if (!model && agent?.model) model = agent.model;
   if (!provider && agent?.provider) provider = agent.provider;
 
-  const session = sessionId || generateSessionId();
+  // Normalize sessionId: trim + collapse whitespace to underscore so
+  // `sess demo user` and `sess_demo_user` both resolve to the same
+  // chart. (Both divination and chat routes apply this.)
+  const session = (sessionId || generateSessionId()).trim().replace(/\s+/g, '_');
   const messageId = generateMessageId();
   const startTime = Date.now();
   const llmManager = getLLMManager();
@@ -171,15 +174,19 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
 
   // ─── Agent-specific system prompt (prompts/system/<id>.yaml) ───
   // When the request names an agent that has a systemPromptId, render
-  // that prompt and inject it as the first system message. This is what
-  // turns a generic LLM call into a 六爻 specialist.
+  // that prompt and inject it as the FIRST system message. This is what
+  // turns a generic LLM call into a 六爻 specialist. We build a list
+  // of all system messages here and unshift ONCE at the end so the
+  // ordering stays stable (agent instruction first, chart summary
+  // second).
+  const systemMessagesToInject: Array<{ role: 'system'; content: string }> = [];
   if (agent?.systemPromptId) {
     const promptMgr = getPromptManager();
     const rendered = promptMgr.render(agent.systemPromptId, {
       agent_name: agent.name,
     }, 'system');
     if (rendered) {
-      llmMessages.unshift({ role: 'system', content: rendered });
+      systemMessagesToInject.push({ role: 'system', content: rendered });
     } else {
       logger.warn(`Agent ${agent.id} references missing systemPromptId=${agent.systemPromptId}`);
     }
@@ -236,7 +243,7 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
         ? `排盘警告：${(stored.chart.warnings || []).join('；')}`
         : null,
     ].filter(Boolean).join('\n');
-    llmMessages.unshift({ role: 'system', content: summary });
+    systemMessagesToInject.push({ role: 'system', content: summary });
     logger.debug(`Injected stored chart for session=${session}`);
   }
 
@@ -250,6 +257,14 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
     const allowed = new Set(agent.tools);
     tools = tools.filter((t: any) => allowed.has(t.name));
   }
+
+  // ─── Unshift system messages (agent prompt first, then chart summary)
+  // Doing it in one place keeps ordering stable. The LLM reads in
+  // order, so the agent's instructions MUST come before the
+  // user-data summary (otherwise the LLM "primes" on the data and
+  // ignores the instructions, which is what was happening before).
+  for (const m of systemMessagesToInject) llmMessages.unshift(m);
+  systemMessagesToInject.length = 0; // (defensive — also reset)
 
   // Bind the divination tool to this request's (userId, sessionId), so
   // when the LLM calls `divination(action=analyze)` it implicitly reads
@@ -449,7 +464,10 @@ router.post('/stream', async (req: Request, res: Response) => {
     return;
   }
 
-  const session = sessionId || generateSessionId();
+  // Normalize sessionId: trim + collapse whitespace to underscore so
+  // `sess demo user` and `sess_demo_user` both resolve to the same
+  // chart. (Both divination and chat routes apply this.)
+  const session = (sessionId || generateSessionId()).trim().replace(/\s+/g, '_');
 
   // Bug 2 Fix: Acquire session lock to prevent race conditions
   const lock = acquireSessionLock(session, userId);

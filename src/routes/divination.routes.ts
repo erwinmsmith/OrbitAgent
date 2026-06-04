@@ -79,7 +79,13 @@ router.post('/cast', asyncHandler(async (req: Request, res: Response) => {
 router.post('/chart', asyncHandler(async (req: Request, res: Response) => {
   const userId = userIdOrThrow(req);
   const body = req.body || {};
-  const sessionId: string | undefined = body.sessionId;
+  // Normalize sessionId so 'sess demo user', 'sess_demo_user', and
+  // 'sess-demo-user' all resolve to the same chart. Whitespace
+  // inside the id is a common CLI mistake when the user forgets to
+  // quote it; we'd rather collapse that than 404.
+  const sessionId: string | undefined = typeof body.sessionId === 'string'
+    ? body.sessionId.trim().replace(/\s+/g, '_')
+    : body.sessionId;
   if (!sessionId) {
     throw new AppError('VALIDATION_ERROR',
       'sessionId is required — the chart is persisted under it so the liuyao agent can read it later',

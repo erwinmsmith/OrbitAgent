@@ -1,37 +1,55 @@
 /**
  * `divination` tool — the only callable tool the 六爻 agent needs.
  *
- * Flow:
- *   - The user runs `orbit divination chart <bits> --session <id>` once.
- *     The chart is persisted to ChartStore (Mongo) under
- *     (userId, sessionId, chartKey).
- *   - The agent is then invoked on that session. /chat injects a chart
- *     summary as a system message, and binds (userId, sessionId) to
- *     this tool. The LLM calls this tool with action=analyze and
- *     gets back the full 6/9-section report — without ever seeing
- *     the raw bits or having to decide a sessionId.
- *   - There is no `cast` or `chart` action in the tool schema. Those
- *     are CLI concerns, not agent concerns. The agent reads the
- *     already-stored chart.
+ * Two actions:
+ *   - `analyze`: reads the chart the user previously cast (via
+ *     `orbit divination chart`) from the server-side ChartStore and
+ *     returns a structured 6/9-section AnalysisReport with RAG
+ *     citations.
+ *   - `rag-search`: looks up domain knowledge from the 智谱
+ *     Embedding-3-backed RAG corpus (装卦方法/六爻卦理/实例应用/
+ *     精华荟萃/etc.). Use this to cite a source when explaining a
+ *     concept that is not in the LLM's own training data, e.g.
+ *     "回头生克" or "动化进退" or 黄金策 quote.
  *
- * Per-user isolation: the tool's read is scoped by boundUserId, so
+ * Flow:
+ *   - The user runs `orbit divination chart <bits> --session <id>`
+ *     once. The chart is persisted to ChartStore (Mongo) under
+ *     (userId, sessionId, chartKey).
+ *   - The agent is then invoked on that session. /chat injects a
+ *     short chart pointer into the system prompt and binds
+ *     (userId, sessionId) to this tool. The LLM calls
+ *     `divination.analyze` for the full report and
+ *     `divination.rag-search` for domain citations — without ever
+ *     having to decide a sessionId.
+ *
+ * Per-user isolation: the chart read is scoped by boundUserId, so
  * the LLM (or a malicious /chat caller) cannot probe other users'
- * stored charts by guessing a sessionId.
+ * stored charts by guessing a sessionId. RAG searches are also
+ * scoped by userId (system-scope + the caller's own user-scope
+ * uploads).
  */
 import { ToolDefinition, ToolParams } from '../types';
 import { getChart } from '../../../core/memory/ChartStore';
 import { runAnalysisAgent } from '../../../liuyao/agent/analysisAgent';
+import { search as ragSearch } from '../../../liuyao/rag';
 
 export default class DivinationTool {
   readonly id = 'divination';
   readonly name = 'divination';
   readonly description =
-    '六爻 analysis step. ONE action: `analyze`. ' +
-    'Reads the chart the user previously cast (via `orbit divination chart`) ' +
-    'from the server-side ChartStore and returns a structured 6-section ' +
-    'AnalysisReport with RAG citations. ' +
-    'The agent MUST use this when the user asks for an interpretation — ' +
-    'never recompute 本卦/变卦/纳甲/六亲/六神 itself.';
+    '六爻 tool for the agent. Two actions:\n' +
+    '1. action="analyze": reads the chart the user previously cast ' +
+    '(via `orbit divination chart`) from the server-side ChartStore ' +
+    'and returns a structured 6/9-section AnalysisReport with RAG ' +
+    'citations.\n' +
+    '2. action="rag-search": looks up domain knowledge from the ' +
+    '智谱-Embedding-3-backed RAG corpus (装卦方法 / 六爻卦理 / ' +
+    '实例应用 / 精华荟萃 / 黄金策 / 增删卜易 / etc.). Pass a ' +
+    'natural-language query and a `k` (default 4); the top-k chunks ' +
+    'come back with their source file, section title, and a snippet.\n' +
+    'Use both: call `analyze` once for the full report, then call ' +
+    '`rag-search` whenever you need to cite a specific concept.';
   readonly schema: ToolDefinition = {
     name: 'divination',
     description: this.description,
@@ -40,22 +58,23 @@ export default class DivinationTool {
       properties: {
         action: {
           type: 'string',
-          enum: ['analyze'],
-          description: 'Only "analyze" is supported; the chart was already cast by the user.',
+          enum: ['analyze', 'rag-search'],
+          description: '`analyze` returns the full chart interpretation; `rag-search` looks up a concept in the RAG corpus.',
+        },
+        query: {
+          type: 'string',
+          description: 'Required for action=rag-search. Natural-language query, e.g. "回头生克" or "妻财持世".',
+        },
+        k: {
+          type: 'number',
+          description: 'Top-k chunks to return for action=rag-search. Default 4.',
+          default: 4,
         },
       },
       required: ['action'],
     },
   };
 
-  /**
-   * Bound (userId, sessionId, isAdmin) — set by /chat before each
-   * tool call. The userId scopes both the chart read AND the RAG
-   * citations in the rendered report; the sessionId selects the
-   * chart; isAdmin widens the RAG visibility for admin users.
-   * None of these are exposed in the tool's inputSchema so the LLM
-   * never has to think about any of them.
-   */
   private boundSessionId: string | null = null;
   private boundUserId: string | null = null;
   private boundIsAdmin: boolean = false;
@@ -65,21 +84,37 @@ export default class DivinationTool {
     this.boundUserId = userId;
     this.boundIsAdmin = isAdmin;
   }
-  /** Back-compat shim — older call sites only set sessionId. */
   setBoundSessionId(sessionId: string): void {
     this.boundSessionId = sessionId;
   }
   getBoundSessionId(): string | null { return this.boundSessionId; }
 
   async execute(params: ToolParams): Promise<any> {
-    if (params.action !== 'analyze') {
-      throw new Error(`divination tool only supports action=analyze, got: ${params.action}`);
+    if (params.action === 'analyze') {
+      if (!this.boundSessionId || !this.boundUserId) {
+        throw new Error('divination tool: no (userId, sessionId) bound. /chat must set it before each call.');
+      }
+      const stored = await getChart(this.boundUserId, this.boundSessionId);
+      return runAnalysisAgent(stored.chart, this.boundUserId, this.boundIsAdmin);
     }
-    if (!this.boundSessionId || !this.boundUserId) {
-      throw new Error('divination tool: no (userId, sessionId) bound. /chat must set it before each call.');
+    if (params.action === 'rag-search') {
+      const q = (params.query ?? '').toString().trim();
+      if (!q) {
+        throw new Error('divination.rag-search: `query` is required');
+      }
+      if (!this.boundUserId) {
+        throw new Error('divination tool: no userId bound. /chat must set it before each call.');
+      }
+      const k = Math.max(1, Math.min(20, parseInt(String(params.k ?? 4), 10) || 4));
+      const hits = await ragSearch(q, k, this.boundUserId, this.boundIsAdmin);
+      return hits.map(({ chunk, score }) => ({
+        source: chunk.source,
+        title: chunk.title,
+        snippet: chunk.text.slice(0, 200),
+        score,
+      }));
     }
-    const stored = await getChart(this.boundUserId, this.boundSessionId);
-    return runAnalysisAgent(stored.chart, this.boundUserId, this.boundIsAdmin);
+    throw new Error(`divination tool: unknown action "${params.action}"`);
   }
 
   protected async run(params: ToolParams): Promise<any> {
