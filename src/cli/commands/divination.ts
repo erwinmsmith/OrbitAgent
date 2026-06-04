@@ -68,14 +68,18 @@ export function registerDivination(program: Command): void {
         console.log(chalk.green(`✓ Chart assembled and stored.`));
         console.log(`  sessionId: ${chalk.cyan(sessionId)}`);
         console.log(`  chartKey:   ${chalk.cyan(opts.chartKey)}`);
-        console.log(`  orig:       ${chalk.cyan(data.originalHexagram?.name ?? '?')}`);
-        console.log(`  changed:    ${chalk.cyan(data.changedHexagram?.name ?? '?')}`);
         console.log(`  palace:     ${chalk.cyan(`${data.originalHexagram?.palace ?? '?'}宫 · ${data.originalHexagram?.palaceType ?? '?'} · ${data.originalHexagram?.element ?? '?'}`)}`);
         console.log(`  shi/ying:   ${chalk.cyan(`${data.lines?.find((l: any) => l.isShi)?.position ?? '?'}/${data.lines?.find((l: any) => l.isYing)?.position ?? '?'}`)}`);
-        console.log(`  moving:     ${chalk.cyan((data.movingLines || []).join(',') || 'none')}`);
-        // First-step proof: show the 6 lines' (branch, sixRelative, sixGod) so the
-        // user can visually confirm the deterministic engine produced the right
-        // 装卦. The agent has all of this and more.
+        const moving = (data.movingLines as number[]) || [];
+        console.log(`  moving:     ${chalk.cyan(moving.length ? moving.join(',') : 'none')}`);
+        // Hexagram picture — both 本卦 and 变卦 side by side, top-to-bottom.
+        // The renderer marks moving lines and shows the changed yin/yang
+        // for each moving line.
+        console.log();
+        console.log(`  ${chalk.bold('本卦')} ${data.originalHexagram?.fullName ?? data.originalHexagram?.name ?? '?'}` +
+                    `     ${chalk.bold('变卦')} ${chalk.cyan(data.changedHexagram?.fullName ?? data.changedHexagram?.name ?? '?')}`);
+        renderHexagramPair(data);
+        // Line decorations (branch, sixRelative, sixGod).
         if (Array.isArray(data.lines)) {
           console.log();
           console.log(chalk.gray('  Lines (pos: branch sixRelative sixGod):'));
@@ -238,7 +242,11 @@ function parseSixBits(bits: string[]): [0 | 1, 0 | 1, 0 | 1, 0 | 1, 0 | 1, 0 | 1
       console.error(chalk.red(`✗ bit ${i + 1} must be 0 or 1, got "${bits[i]}"`));
       process.exit(2);
     }
-    out[i] = v as any;
+    // Cast to 0|1 (NUMBER, not the original string) so the server's
+    // castSkill receives the right JSON type. Sending "1" as a string
+    // made the server's yaoValue check (v !== 6 && v !== 7 && ... !==
+    // 9) fail, which fell back to an empty chart.
+    out[i] = (v === '1' ? 1 : 0) as 0 | 1;
   }
   return out;
 }
@@ -258,4 +266,52 @@ function parseSixYao(values: string[]): [6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8
     out[i] = v as any;
   }
   return out;
+}
+
+/** Render the 6 lines of a hexagram (top-to-bottom, traditional order).
+ *  Yin = `----  ----` (broken line), yang = `----------` (solid line).
+ *  Moving lines are highlighted + marked with `→ 变爻` in the changed
+ *  hex on the right. */
+function renderLine(yinYang: '阴' | '阳', moving: boolean, isChangedMoving: boolean): string {
+  // Use a fixed-width line so the two hexagrams align side-by-side.
+  // Yang: ━━━━━━━━  Yin: ━━━━ ━━━━
+  const line = yinYang === '阳' ? '━━━━━━━━━━' : '━━━━  ━━━━';
+  if (moving && isChangedMoving) {
+    return chalk.yellow.bold(line);
+  }
+  if (moving) {
+    return chalk.yellow(line);
+  }
+  if (isChangedMoving) {
+    return chalk.cyan(line);
+  }
+  return chalk.gray(line);
+}
+
+/** Render the 本卦 and 变卦 side-by-side. Top line is 上爻, bottom is 初爻.
+ *
+ *  Format (each line is 1 row, two hexagrams separated by `│`):
+ *      本卦 (left, with moving marks)               │  变卦 (right, with changed-line marks)
+ *      ━━━━━━━━━━                                    │  ━━━━━━━━━━
+ *      ━━━━━━━━━━                                    │  ━━━━  ━━━━     ← 动爻翻转
+ *      ...
+ */
+function renderHexagramPair(data: any): void {
+  const lines = data.lines as any[];
+  if (!Array.isArray(lines) || lines.length !== 6) return;
+
+  // 本卦 = data.lines[i].yinYang (the original cast)
+  // 变卦 = data.lines[i].changedYinYang (after flipping moving lines)
+  // Display top-to-bottom: position 6 first.
+  const movingSet = new Set((data.movingLines as number[]) || []);
+
+  for (let i = 5; i >= 0; i--) {
+    const l = lines[i]!;
+    const isMoving = movingSet.has(l.position);
+    const leftLine = renderLine(l.yinYang, isMoving, false);
+    const rightLine = renderLine(l.changedYinYang, false, isMoving);
+    const label = isMoving ? chalk.yellow(`第 ${l.position} 爻 ${chalk.reset('动')}`) : chalk.gray(`第 ${l.position} 爻`);
+    // Two hexagrams side-by-side, 11-char wide each + a 3-char gap.
+    console.log(`  ${leftLine}    ${rightLine}   ${label}`);
+  }
 }
