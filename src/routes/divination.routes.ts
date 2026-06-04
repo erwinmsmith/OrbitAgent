@@ -178,10 +178,23 @@ router.post('/analyze', asyncHandler(async (req: Request, res: Response) => {
       'Either a `chart` object or a `sessionId` (with stored chart) is required',
       HTTP_STATUS.BAD_REQUEST);
   }
-  // runAnalysisAgent now runs the full multi-stage pipeline
-  // (build brief → LLM #1 understand → RAG retrieve → LLM #2
-  // synthesize). The result includes { report, brief, debug }.
-  const result = await runAnalysisAgent(chart, userId, isAdmin(req), { debug: includeDebug });
+  // Thinking-mode opt-in. `thinking: true` switches the pipeline from
+  // 3-stage (1 RAG pass + 1 final synthesis) to multi-angle (1 + N + 1
+  // LLM calls, each angle doing its own RAG pass). Clamp `angles` to
+  // [1, 5] with a default of 3.
+  const thinking = body.thinking === true || body.thinking === 'true';
+  const rawAngles = Number(body.angles);
+  const angleBudget = Number.isFinite(rawAngles)
+    ? Math.max(1, Math.min(5, Math.floor(rawAngles)))
+    : 3;
+  // runAnalysisAgent now runs either the default 3-stage pipeline or
+  // the multi-angle thinking pipeline. The result is
+  // { report, brief, debug } either way.
+  const result = await runAnalysisAgent(chart, userId, isAdmin(req), {
+    debug: includeDebug,
+    thinking,
+    angles: angleBudget,
+  });
   // Backward-compat: when the caller didn't ask for debug, return
   // just the report at the top level (the old shape).
   if (!includeDebug) {
@@ -223,10 +236,13 @@ router.get('/brief/:sessionId', asyncHandler(async (req: Request, res: Response)
 /** Bootstrap the system knowledge base. Admin only — walks the
  *  docs/base_knowledge/ directory and ingests each .md as a
  *  system-scope document. Idempotent. */
-router.post('/rag/bootstrap', adminOnly, asyncHandler(async (_req: Request, res: Response) => {
+const rebuildSystemKnowledge = asyncHandler(async (_req: Request, res: Response) => {
   const r = await bootstrapSystemKnowledge();
   res.json({ success: true, data: r });
-}));
+});
+
+router.post('/rag/bootstrap', adminOnly, rebuildSystemKnowledge);
+router.post('/rag/rebuild', adminOnly, rebuildSystemKnowledge);
 
 /** Upload a markdown document. Defaults to user-scope (private to
  *  the caller). Admins can pass { scope: 'system' } to make a

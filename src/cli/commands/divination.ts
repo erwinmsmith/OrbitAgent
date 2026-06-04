@@ -146,8 +146,10 @@ export function registerDivination(program: Command): void {
     });
 
   cmd.command('analyze <file>')
-    .description('Run the analysis agent on a chart read from a JSON file (e.g. one produced by `chart`). Pass --debug to see the full multi-stage pipeline timeline.')
+    .description('Run the analysis agent on a chart read from a JSON file (e.g. one produced by `chart`). Pass --debug to see the full multi-stage pipeline timeline. Pass --thinking to enable multi-angle analysis (1 + N + 1 LLM calls, each angle with its own RAG pass).')
     .option('--debug', 'Show the full pipeline timeline: build brief → LLM #1 understand → RAG retrieve → LLM #2 synthesize')
+    .option('--thinking', 'Enable multi-angle thinking mode (1 + N + 1 LLM calls; one per angle, each with its own RAG pass). Slower and more thorough than the default 3-stage pipeline.')
+    .option('--angles <n>', 'Number of independent angles to investigate in --thinking mode. Clamped to 1–5, default 3.', (v) => parseInt(v, 10))
     .action(async (file: string, opts) => {
       let chart: any;
       try {
@@ -163,7 +165,10 @@ export function registerDivination(program: Command): void {
         process.exit(1);
       }
       try {
-        const data = await apiPost<any>('/divination/analyze', { chart, debug: !!opts.debug });
+        const body: any = { chart, debug: !!opts.debug };
+        if (opts.thinking) body.thinking = true;
+        if (Number.isFinite(opts.angles)) body.angles = opts.angles;
+        const data = await apiPost<any>('/divination/analyze', body);
         // When debug=false, the route returns the report at the top
         // level. When debug=true, it returns { report, brief, debug }.
         const report = data.report ?? data;
@@ -434,6 +439,48 @@ export function renderPipelineTimeline(debug: any): void {
     }
   }
 
+  // Thinking-mode per-angle block. Only populated when the pipeline
+  // was run with `thinking: true`. Each angle did its own RAG + LLM
+  // call; we render the perspective + the LLM's analysis + the
+  // per-angle RAG hits so the caller can audit grounding per angle.
+  const perAngle = (debug as any).perAngle as Array<{
+    name: string;
+    perspective: string;
+    ragQueries: string[];
+    hits: Array<{ source: string; title: string; score: number; snippet: string }>;
+    analysis: string;
+    model: string;
+    provider: string;
+    usage?: { inputTokens: number; outputTokens: number; totalTokens: number; cacheHitTokens?: number };
+  }> | undefined;
+  if (Array.isArray(perAngle) && perAngle.length > 0) {
+    console.log();
+    console.log(chalk.cyan('  [多角度分析 (thinking 模式)]'));
+    console.log(`    角度数: ${chalk.yellow(perAngle.length)}`);
+    perAngle.forEach((a, i) => {
+      console.log();
+      console.log(`    ${chalk.bold(`角度 ${i + 1}：${a.name}`)}`);
+      console.log(`      perspective: ${chalk.gray(a.perspective)}`);
+      if (Array.isArray(a.ragQueries) && a.ragQueries.length) {
+        console.log(`      RAG queries: ${a.ragQueries.map((q) => chalk.cyan(q)).join(', ')}`);
+      }
+      if (Array.isArray(a.hits) && a.hits.length) {
+        console.log(`      RAG hits (${a.hits.length}):`);
+        for (const h of a.hits) {
+          console.log(`        - ${chalk.cyan(h.source)}  ${chalk.gray(h.title)}  score=${(h.score ?? 0).toFixed(3)}`);
+          console.log(`          ${chalk.gray((h.snippet || '').replace(/\s+/g, ' ').slice(0, 150))}`);
+        }
+      }
+      if (a.analysis) {
+        const prose = String(a.analysis).replace(/\s+/g, ' ').slice(0, 400);
+        console.log(`      LLM 分析: ${chalk.gray(prose)}${prose.length >= 400 ? '…' : ''}`);
+      }
+      if (a.usage) {
+        console.log(`      tokens: in=${a.usage.inputTokens ?? 0}  out=${a.usage.outputTokens ?? 0}`);
+      }
+    });
+  }
+
   console.log(titleSep);
   console.log(chalk.gray(`总耗时: ${debug.totalDurationMs ?? 0}ms`));
 }
@@ -443,12 +490,13 @@ function stageDisplayName(stage: string): string {
     case 'build-brief':    return '①  构建 ChartBrief';
     case 'understand':     return '②  LLM #1 — 理解';
     case 'rag-retrieve':   return '③  RAG 召回';
-    case 'synthesize':     return '④  LLM #2 — 综合分析';
+    case 'angle-analyze':  return '④  角度分析';
+    case 'synthesize':     return '⑤  LLM #N — 综合分析';
     default:                return stage;
   }
 }
 
-function stageDetail(step: { stage: string; meta: Record<string, unknown> }): string {
+function stageDetail(step: { stage: string; meta: Record<string, unknown>; angleName?: string }): string {
   const m = step.meta || {};
   switch (step.stage) {
     case 'build-brief':
@@ -457,15 +505,24 @@ function stageDetail(step: { stage: string; meta: Record<string, unknown> }): st
       const u = m.usage as { inputTokens?: number; outputTokens?: number } | undefined;
       const tokens = u ? `in=${u.inputTokens ?? 0} out=${u.outputTokens ?? 0}` : '';
       const model = m.model ? `${m.model}` : '';
-      return `${model} ${tokens}`.trim();
+      const anglesTag = m.anglesPlanned ? ` angles=${m.anglesPlanned}` : '';
+      return `${model} ${tokens}${anglesTag}`.trim();
     }
-    case 'rag-retrieve':
-      return `queries=${m.queryCount ?? 0} hits=${m.totalHitCount ?? 0} deduped=${m.dedupedCount ?? 0}`;
+    case 'rag-retrieve': {
+      const angleTag = step.angleName ? ` (angle=${step.angleName})` : '';
+      return `queries=${m.queryCount ?? 0} hits=${m.dedupedCount ?? 0}${angleTag}`.trim();
+    }
+    case 'angle-analyze': {
+      const u = m.usage as { inputTokens?: number; outputTokens?: number } | undefined;
+      const tokens = u ? `in=${u.inputTokens ?? 0} out=${u.outputTokens ?? 0}` : '';
+      return `angle=${step.angleName ?? '?'} ${tokens}`.trim();
+    }
     case 'synthesize': {
       const u = m.usage as { inputTokens?: number; outputTokens?: number } | undefined;
       const tokens = u ? `in=${u.inputTokens ?? 0} out=${u.outputTokens ?? 0}` : '';
       const len = m.contentLength ? `${m.contentLength}chars` : '';
-      return `${m.model ?? '?'} ${tokens} ${len}`.trim();
+      const angleTag = m.angleCount ? ` (merged ${m.angleCount} angles)` : '';
+      return `${m.model ?? '?'} ${tokens} ${len}${angleTag}`.trim();
     }
     default:
       return '';

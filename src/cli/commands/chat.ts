@@ -24,6 +24,8 @@ export function registerChat(program: Command): void {
     .option('--system <text>', 'Prepend a system message (note: not all models honor it)')
     .option('--agent <id>', 'Agent id from configs/agents.yaml. Default agent for this project is the 六爻 specialist — pass `generic` if you want a vanilla LLM call without divination behaviour.')
     .option('--debug', 'Show the full multi-stage analysis pipeline timeline (build brief → LLM #1 understand → RAG retrieve → LLM #2 synthesize) plus RAG citations and tool calls.')
+    .option('--thinking', 'Enable multi-angle thinking mode: the analyze pipeline runs 1 + N + 1 LLM calls (one per angle, each with its own RAG), then a final synthesis. Slower and more thorough than the default 3-stage pipeline.')
+    .option('--angles <n>', 'Number of independent angles to investigate in --thinking mode. Clamped to 1–5, default 3.', (v) => parseInt(v, 10))
     .action(async (messageParts: string[], opts) => {
       const message = messageParts.length ? messageParts.join(' ') : await readStdin();
       if (!message.trim()) {
@@ -49,6 +51,8 @@ export function registerChat(program: Command): void {
       if (opts.system) body.systemPrompt = opts.system;
       if (opts.agent) body.agentId = opts.agent;
       if (opts.debug) body.debug = true;
+      if (opts.thinking) body.thinking = true;
+      if (Number.isFinite(opts.angles)) body.angles = opts.angles;
 
       if (opts.stream) {
         await runStream(body, session);
@@ -74,10 +78,11 @@ async function runBlocking(body: any, session: string): Promise<void> {
     // data shape: { sessionId, content, model, provider, usage, toolCalls, debug? }
     process.stdout.write(data.content);
     if (!data.content.endsWith('\n')) process.stdout.write('\n');
+    const thinkingTag = (data.debug && data.debug.thinking) ? ' • thinking' : '';
     process.stderr.write(chalk.gray(
       `\n[${data.model}/${data.provider} • session=${data.sessionId}` +
       ` • in=${data.usage?.inputTokens ?? 0} out=${data.usage?.outputTokens ?? 0}` +
-      ` • cacheHit=${data.usage?.cacheHitTokens ?? 0}]\n`,
+      ` • cacheHit=${data.usage?.cacheHitTokens ?? 0}${thinkingTag}]\n`,
     ));
     if (body.debug && data.debug) {
       // Print the full multi-stage pipeline timeline. The render is

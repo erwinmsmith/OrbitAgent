@@ -65,6 +65,16 @@ export default class DivinationTool {
           description: 'For action=analyze: include the full pipeline timeline (every LLM call, RAG query, hit). Default true so the chat route can surface it.',
           default: true,
         },
+        thinking: {
+          type: 'boolean',
+          description: 'For action=analyze: enable multi-angle thinking mode. The pipeline runs the LLM once per angle in parallel, each angle doing its own RAG retrieval, then a final synthesis step merges all per-angle analyses. Slower and costs more tokens than the default 3-stage pipeline, but produces a more thorough report.',
+          default: false,
+        },
+        angles: {
+          type: 'number',
+          description: 'For action=analyze with thinking=true: how many independent angles to investigate in parallel. Default 3, max 5. The Stage-1 LLM plans the angles; if it returns fewer, the pipeline pads with the standard defaults (用神/世应/时间/古断).',
+          default: 3,
+        },
       },
       required: ['action'],
     },
@@ -102,9 +112,17 @@ export default class DivinationTool {
       }
       const stored = await getChart(this.boundUserId, this.boundSessionId);
       const includeDebug = params.debug !== false; // default true
+      const thinking = params.thinking === true;
+      // Clamp angles into [1, 5] with a default of 3.
+      const rawAngles = Number(params.angles);
+      const angles = Number.isFinite(rawAngles)
+        ? Math.max(1, Math.min(5, Math.floor(rawAngles)))
+        : 3;
       const result = await runAnalysisAgent(stored.chart, this.boundUserId, this.boundIsAdmin, {
         model: this.boundModel ?? undefined,
         debug: includeDebug,
+        thinking,
+        angles,
       });
       return result;
     }

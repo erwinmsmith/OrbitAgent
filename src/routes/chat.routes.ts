@@ -67,6 +67,12 @@ function sendSSEError(res: Response, errorCode: string, errorMessage: string, se
 router.post('/', asyncHandler(async (req: Request, res: Response) => {
   const { sessionId, message, agentId, debug } = req.body;
   const showDebug = debug === true || debug === 'true';
+  const thinking = req.body.thinking === true || req.body.thinking === 'true';
+  // Clamp `angles` to [1, 5] with a default of 3.
+  const rawAngles = Number(req.body.angles);
+  const angleBudget = Number.isFinite(rawAngles)
+    ? Math.max(1, Math.min(5, Math.floor(rawAngles)))
+    : 3;
   let { model, provider } = req.body;
   const userId = req.user?.userId || req.apiKey?.userId;
 
@@ -266,6 +272,25 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
   // ignores the instructions, which is what was happening before).
   for (const m of systemMessagesToInject) llmMessages.unshift(m);
   systemMessagesToInject.length = 0; // (defensive — also reset)
+
+  // ─── Thinking-mode nudge ───────────────────────────────────────
+  // If the caller opted into thinking mode, inject a system-level
+  // instruction telling the LLM to call `divination.analyze` with
+  // `thinking: true` and the right `angles` budget. The DivinationTool
+  // already accepts both params; this is just making sure the LLM
+  // uses them. The nudge is appended LAST so it overrides the agent's
+  // default tool-call shape (LLM tends to be more responsive to the
+  // most-recent system message).
+  if (thinking) {
+    llmMessages.unshift({
+      role: 'system',
+      content:
+        '[运行时开关] thinking 模式已开启。当你调用 divination 工具的 ' +
+        `analyze action 时，必须传 thinking: true, angles: ${angleBudget}。` +
+        `这会让分析 Agent 走多角度流水线（先理解，再按 ${angleBudget} 个独立角度并行检索 ` +
+        '+ 分析，最后综合），比默认 3 阶段更慢但更全面。',
+    });
+  }
 
   // Bind the divination tool to this request's (userId, sessionId), so
   // when the LLM calls `divination(action=analyze)` it implicitly reads
@@ -471,6 +496,7 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
     const analysisReport = lastAnalysisResult?.report;
     const analysisDebug = lastAnalysisResult?.debug;
     responseData.debug = {
+      thinking,
       toolCalls: toolCallLog,
       // The legacy "rag" block is kept for callers that already
       // depend on it (e.g. earlier orbit CLI versions). It now points
@@ -484,6 +510,8 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
       },
       // The new full-pipeline timeline. Every stage has its own
       // wall-clock + meta (model, usage, query list, hit count).
+      // For thinking mode this includes one `angle-analyze` step
+      // per planned angle and a `perAngle[]` array at the top.
       pipeline: analysisDebug ?? null,
     };
   }
@@ -615,7 +643,7 @@ router.post('/stream', async (req: Request, res: Response) => {
           type: 'done',
           content: fullContent,
           sessionId: session,
-          // Include the resolved model so SSE clients (e.g. the `orbit`
+          // Include the resolved model so SSE clients (e.g. the orbit
           // CLI) can label the response without having to re-resolve.
           model: resolvedModel,
           provider: resolvedProvider,

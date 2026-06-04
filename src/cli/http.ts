@@ -14,7 +14,11 @@ function getClient(): AxiosInstance {
   const token = getToken();
   client = axios.create({
     baseURL: getBaseUrl(),
-    timeout: 60_000,
+    // Default 60s is fine for /chat, /divination/chart, etc. Bumped to
+    // 240s so that `orbit chat --thinking` (1 + N + 1 LLM calls in
+    // series) has headroom; a 3-angle run on deepseek-v4-flash can
+    // take 90–180s end-to-end, plus the synthesize call.
+    timeout: 240_000,
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
