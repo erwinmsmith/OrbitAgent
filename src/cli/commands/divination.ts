@@ -270,14 +270,36 @@ function parseSixYao(values: string[]): [6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8
 
 /** Render the 6 lines of a hexagram (top-to-bottom, traditional order).
  *  Yin = `----  ----` (broken line), yang = `----------` (solid line).
- *  Moving lines are highlighted + marked with `→ 变爻` in the changed
- *  hex on the right. */
-function renderLine(yinYang: '阴' | '阳', moving: boolean, isChangedMoving: boolean): string {
+ *  Moving lines are highlighted in yellow. 世/应 lines get a
+ *  distinctive bold treatment so they stand out from regular lines
+ *  and from each other. */
+function renderLine(
+  yinYang: '阴' | '阳',
+  moving: boolean,
+  isChangedMoving: boolean,
+  isShi: boolean,
+  isYing: boolean,
+  position: number,
+): string {
   // Use a fixed-width line so the two hexagrams align side-by-side.
   // Yang: ━━━━━━━━  Yin: ━━━━ ━━━━
   const line = yinYang === '阳' ? '━━━━━━━━━━' : '━━━━  ━━━━';
-  if (moving && isChangedMoving) {
-    return chalk.yellow.bold(line);
+  // Priority order:
+  //   1. 世爻 → bold red (most important line in the chart)
+  //   2. 应爻 → bold magenta (secondary marker)
+  //   3. 动爻 (本卦) → yellow (overrides 世/应 if both apply — but in
+  //      practice 世/应 are rarely also moving, so this is rare)
+  //   4. 动爻 (变卦翻转) → cyan
+  //   5. 普通 → gray
+  if (isShi && isYing) {
+    // 世=应 happens for very few cases; fall back to red.
+    return chalk.red.bold(line);
+  }
+  if (isShi) {
+    return chalk.red.bold(line);
+  }
+  if (isYing) {
+    return chalk.magenta.bold(line);
   }
   if (moving) {
     return chalk.yellow(line);
@@ -290,28 +312,41 @@ function renderLine(yinYang: '阴' | '阳', moving: boolean, isChangedMoving: bo
 
 /** Render the 本卦 and 变卦 side-by-side. Top line is 上爻, bottom is 初爻.
  *
- *  Format (each line is 1 row, two hexagrams separated by `│`):
- *      本卦 (left, with moving marks)               │  变卦 (right, with changed-line marks)
- *      ━━━━━━━━━━                                    │  ━━━━━━━━━━
- *      ━━━━━━━━━━                                    │  ━━━━  ━━━━     ← 动爻翻转
- *      ...
+ *  世爻 = bold red    应爻 = bold magenta    动爻 = yellow
+ *
+ *  Each line label shows the position + (optional)【世】/【应】/动 tag.
  */
 function renderHexagramPair(data: any): void {
   const lines = data.lines as any[];
   if (!Array.isArray(lines) || lines.length !== 6) return;
 
-  // 本卦 = data.lines[i].yinYang (the original cast)
-  // 变卦 = data.lines[i].changedYinYang (after flipping moving lines)
-  // Display top-to-bottom: position 6 first.
   const movingSet = new Set((data.movingLines as number[]) || []);
 
   for (let i = 5; i >= 0; i--) {
     const l = lines[i]!;
     const isMoving = movingSet.has(l.position);
-    const leftLine = renderLine(l.yinYang, isMoving, false);
-    const rightLine = renderLine(l.changedYinYang, false, isMoving);
-    const label = isMoving ? chalk.yellow(`第 ${l.position} 爻 ${chalk.reset('动')}`) : chalk.gray(`第 ${l.position} 爻`);
-    // Two hexagrams side-by-side, 11-char wide each + a 3-char gap.
-    console.log(`  ${leftLine}    ${rightLine}   ${label}`);
+    const leftLine = renderLine(l.yinYang, isMoving, false, l.isShi, l.isYing, l.position);
+    const rightLine = renderLine(l.changedYinYang, false, isMoving, l.isShi, l.isYing, l.position);
+    // Label: position + tag(s). Build them in priority order so the
+    // most important marker is leftmost.
+    const tags: string[] = [];
+    if (l.isShi) tags.push(chalk.red.bold('【世】'));
+    if (l.isYing) tags.push(chalk.magenta.bold('【应】'));
+    if (isMoving) tags.push(chalk.yellow('动'));
+    const tagsStr = tags.length ? '  ' + tags.join('') : '';
+    const labelPrefix = isMoving || l.isShi || l.isYing
+      ? chalk.bold(`第 ${l.position} 爻`)
+      : chalk.gray(`第 ${l.position} 爻`);
+    console.log(`  ${leftLine}    ${rightLine}   ${labelPrefix}${tagsStr}`);
+  }
+
+  // Legend so the color codes are unambiguous.
+  const shiLine = data.lines.find((l: any) => l.isShi);
+  const yingLine = data.lines.find((l: any) => l.isYing);
+  if (shiLine || yingLine) {
+    const parts: string[] = [];
+    if (shiLine) parts.push(`${chalk.red.bold('━━━')} ${chalk.red.bold('世爻')} = 第 ${shiLine.position} 爻 (${shiLine.branch} ${shiLine.sixRelative})`);
+    if (yingLine) parts.push(`${chalk.magenta.bold('━━━')} ${chalk.magenta.bold('应爻')} = 第 ${yingLine.position} 爻 (${yingLine.branch} ${yingLine.sixRelative})`);
+    console.log(chalk.gray(`  ${parts.join('   ')}`));
   }
 }
