@@ -1,5 +1,7 @@
 # OrbitAgent
 
+> [English](#) | **[简体中文](README.zh.md)**
+
 **Liuyeo Najia (Six-Yang I-Ching) hexagram casting + LLM interpretation**,
 shipped as a multi-user AI backend.
 
