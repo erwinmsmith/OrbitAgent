@@ -47,8 +47,8 @@ const tokenService = getTokenService();
 
 /**
  * GET /users/tasks/feed
- * Global feed of shared ritual tasks (for "回响之谷"). No auth required —
- * this powers the unauthenticated landing experience.
+ * Global feed of shared ritual tasks. No auth required — this powers
+ * the unauthenticated landing experience.
  */
 router.get('/tasks/feed', asyncHandler(async (req: Request, res: Response) => {
   const page = req.query.page ? parseInt(req.query.page as string) : 1;

@@ -204,7 +204,7 @@ GET  /memory/stats
 
 ### 3.2 用户档案 & 任务 (Ritual / 仪式)
 
-> 这是「此刻」和「回响之谷」的核心 API
+> 用户档案 + ritual 任务管理的核心 API
 
 ```
 # 用户档案
@@ -233,7 +233,7 @@ POST /users/tasks                        创建仪式
       }
 GET  /users/tasks
       ?page=1&limit=20&archived=false&sortBy=createdAt&sortOrder=desc
-GET  /users/tasks/feed                   全局公开 feed（「回响之谷」）
+GET  /users/tasks/feed                   全局公开 feed（分享的 ritual 任务）
       ?page=1&limit=20
 GET  /users/tasks/:taskId
 PUT  /users/tasks/:taskId
