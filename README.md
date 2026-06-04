@@ -1,701 +1,855 @@
 # OrbitAgent
 
-> [English](#) | **[简体中文](README.zh.md)**
+> 六爻纳甲排盘、知识库检索与 LLM 分析 Agent 后端。
 
-**Liuyeo Najia (Six-Yang I-Ching) hexagram casting + LLM interpretation**,
-shipped as a multi-user AI backend.
+OrbitAgent 的目标不是让大模型自由“算卦”，而是把六爻业务拆成两层：
 
-The engine layer does deterministic chart assembly (本卦/变卦 —
-original/changed hexagrams, 纳甲 — stem-branch assignment, 六亲 —
-six relatives, 六神 — six gods, 世应 — world/response, 旬空 —
-xunkong/void); the LLM layer turns the assembled chart into a
-readable analysis report and converses with the user. Every rule
-table (the 64 hexagrams, the 8-palace 纳甲 assignment, 六亲/六神
-mapping, 旬空, day stem-branch) is hard-coded — the LLM doesn't
-"compute," it only "explains."
+- **程序层负责算准**：起卦输入、阴阳动静、本卦/变卦、八宫、世应、纳甲、六亲、六神、旬空、冲合、动化、用神候选等确定性内容都由规则函数和硬编码表生成。
+- **Agent 层负责说清楚**：LLM 只读取结构化排盘结果和知识库召回片段，生成可解释、有引用、能追问上下文的分析报告。
 
-```
-                ┌─────────────────────────────────────┐
-                │  Deterministic chart engine         │
-                │  ────────────────────────────────  │
-   6 bits ──►   │  cast → hexagram → palace → 纳甲   │  ──►  ChartResult
-   or 6 yao     │  → sixRel → sixGod → void …        │      (stored in Mongo)
-                │                                     │
-                └─────────────────────────────────────┘
-                                │
-                                ▼
-                ┌─────────────────────────────────────┐
-                │  LLM analyst (per-user, scoped)     │
-                │  ────────────────────────────────  │
-                │  • reads ChartResult fields only   │
-                │  • cites RAG chunks (Mongo + search)│
-                │  • never recomputes any chart field│
-                │  • produces 6/9-section report      │
-                └─────────────────────────────────────┘
+核心约束：**LLM 不允许重算或改写任何排盘字段**。如果程序层没有提供某个字段，Agent 必须说明缺失，而不是编造。
+
+```text
+用户问题 + 起卦输入
+        |
+        v
+确定性排盘引擎
+cast -> calendar -> hexagram -> palace -> najia -> sixRelative
+     -> sixGod -> void -> branchRelation -> transformation
+     -> yongshen -> strength -> fushen
+        |
+        v
+ChartResult / ChartBrief  按 userId + sessionId 存入 Mongo
+        |
+        v
+RAG 检索 docs/base_knowledge + 用户私有知识
+        |
+        v
+LLM 分析 Agent 输出 6/9 段报告、引用、不确定性说明
 ```
 
-Core rule (from `design.md`): **the engine computes, the agent
-explains**. The LLM is forbidden from recomputing any chart field;
-if a field is missing it must say so.
+## 业务场景
 
----
+OrbitAgent 当前最适合做一个“六爻专业分析后端”，上层可以接 CLI、Web、小程序、私域工具或知识库研究台。
 
-## The Liuyeo subsystem — what's actually in the box
+| 场景 | 用户问题 | 系统提供的能力 |
+|---|---|---|
+| C 端起卦解读 | 求财、求事业、求感情、求考试、求合同、求健康、求失物、求出行 | 用户输入 6 爻和问题，系统排盘、检索知识库、生成结构化报告 |
+| 咨询师辅助工作台 | 咨询师已有卦例，需要快速装卦、标注用神、整理断语依据 | 程序稳定输出六亲、六神、世应、旬空、动化，LLM 负责形成可读草稿 |
+| 六爻知识库产品 | 需要把经典文本、案例、规则表做成可检索资料库 | 系统语料 + 用户私有语料分层存储，RAG 检索按用户隔离 |
+| 多轮追问 | 用户先起卦，再补充背景、候选方案、时间节点 | ChartStore 按 session 持久化卦盘，后续 chat 自动读取最新 chart |
+| 多 Agent 分析 | 同一卦从用神、世应、时间、古例、动变等角度分开分析 | `analysisAgent` 支持 thinking 模式，按角度并行检索和分析后再综合 |
+| API 集成 | 前端或其他系统只需要一个标准 REST 服务 | `/api/v1/divination/*`、`/api/v1/chat`、`/api/v1/models`、`/api/v1/usage` |
 
-The chart assembly engine ([src/liuyao/](src/liuyao/)) ships with the
-full first-step deterministic pipeline:
+不适合直接交给 LLM 的内容应继续固化为函数或 skill：排盘、装卦、世应、纳甲、六亲、六神、旬空、日月建、生克冲合、旺衰、伏神飞神、化进化退、应期推断基础规则。
 
-- **64-hexagram table** — `docs/base_knowledge/64卦数据.json` (卦辞,
-  爻辞, 世应, 符号, 八宫归属) is loaded at module init and re-keyed
-  into `HEXAGRAMS_BY_BITS` / `HEXAGRAMS_BY_NAME` / `HEXAGRAMS_BY_ID`.
-  Every hexagram's palace, palaceType (本宫/一世/.../归魂), and element
-  are derived from the (upper, lower) trigram pair.
-- **13 skills** orchestrated by `chartAssembler.ts` in fixed order:
-  `cast → hexagram → palace → najia → sixRelative → sixGod → void →
-   branchRelation → transformation → yongshen → strength → fushen`
-  (some are P2 stubs and gracefully report `warnings[]` instead of
-  throwing).
-- **纳甲** — all 8 trigrams × inner/outer × 3 lines (96 cells) from
-  the standard 装纳甲歌诀.
-- **六亲** — derived from `palaceElement` vs `lineElement` via
-  the 五行生克 tables.
-- **六神** — derived from `dayStem` (甲乙起青龙, 丙丁起朱雀, ...).
-- **旬空** — derived from `dayStem` (5 day-stem groups).
-- **RAG knowledge base** — `docs/base_knowledge/*.md` ships with
-  the liuyao corpus (装卦方法, 六爻卦理, 易经详解, 实例应用,
-  装卦补充 + 64 卦数据.json). The RAG store is Mongo-backed
-  (`knowledge_documents` + `knowledge_chunks` collections) with
-  per-user scoping: each user sees the system corpus + their own
-  uploads, never another user's private uploads.
+## 当前能力
 
-### Two-step flow (user + agent)
+| 模块 | 状态 | 说明 |
+|---|---|---|
+| 六爻排盘 | 可用 | 支持 `bits` 静爻输入和 `yaoValues` 动爻输入，按初爻到上爻排列 |
+| 日时推导 | 可用 | 通过 `lunar-typescript` 从 `datetime` / 当前时间推导四柱、旬空、节气 |
+| 64 卦表 | 可用 | `docs/base_knowledge/64卦数据.json` 是当前 canonical 数据源 |
+| 纳甲、六亲、六神 | 可用 | 程序规则生成，不由 LLM 生成 |
+| ChartStore | 可用 | Mongo 持久化，按 userId + sessionId + chartKey 隔离，默认 TTL |
+| RAG 知识库 | 可用 | 自动 bootstrap `docs/base_knowledge/*.md`，支持用户私有上传 |
+| 分析 Agent | 可用 | brief -> understand -> RAG -> synthesize 的多阶段报告链路 |
+| 多 LLM | 可用 | DeepSeek、OpenAI、Anthropic、Gemini、Ollama、OpenAI-compatible provider |
+| CLI | 可用 | `orbit login/chat/divination/models/skills/tools/workflows/usage` |
+| P2 规则 | 部分可用 | 冲合刑害破、旺衰量化、伏神飞神、化进化退、完整用神取用仍需补强 |
 
-Every conversation is a divination conversation by default. The flow
-is intentionally split so the LLM never recomputes the chart:
+## 仓库结构
 
-```
-$ orbit divination chart 1 1 1 1 1 1 \
-    --day-stem 甲 --day-branch 子 --session sess_demo
-✓ Chart assembled and stored.
-  orig: 乾   changed: 乾   palace: 乾宫 · 本宫 · 金
-  shi/ying: 6/3   moving: none
+```text
+src/
+  app.ts                         # Express 应用入口，挂载中间件、路由、服务初始化
+  routes/                        # REST 路由：chat/auth/divination/memory/models/usage 等
+  cli/                           # orbit 命令行客户端，所有业务逻辑仍走 REST API
+  core/
+    llm/                         # 多 provider LLM adapter 和模型路由
+    memory/                      # Redis 临时记忆、Mongo ChartStore、PermanentMemory
+    agents/                      # AgentLoader，读取 configs/agents.yaml
+    skills/                      # 通用 chat preprocessing skill 管理器
+    tools/                       # divination/filesystem/search/MCP tool 管理
+    workflow/                    # YAML workflow engine
+    prompts/                     # system prompt 加载
+  liuyao/
+    skills/                      # 六爻确定性 skill，chartAssembler 固定编排
+    constants/                   # 天干地支、五行、纳甲、六神、64 卦等表
+    agent/                       # ChartBrief、问题分类、分析报告生成
+    rag/                         # Mongo-backed RAG、系统语料 bootstrap
+    types/                       # 六爻领域类型
+  models/                        # Mongoose models
+  services/                      # database、DevAuth、TokenService、SkillInstaller
+  users/                         # 用户资料、任务、公开 feed
 
-$ orbit chat --session sess_demo "Will this investment pay off?"
-Full 6-section report + RAG citations
-```
+configs/
+  agents.yaml                    # agent 声明式注册
+  tools.yaml                     # tool 配置
+  workflows/conversation.yaml    # workflow 示例
 
-The chart is persisted in `ChartStore` (Mongo, 24h TTL,
-per-user scoped) under the session id. The agent reads it back via
-the `divination` tool (single action: `analyze`), which calls
-`runAnalysisAgent` → `buildReport` → RAG-augmented 6/9-section
-report. The agent never sees raw bits.
+prompts/system/
+  default-agent.yaml
+  liuyao-agent.yaml
 
-### How a chart is computed
-
-```bash
-# static yin/yang (no moving lines)
-orbit divination chart 1 1 1 1 1 1 --day-stem 甲 --day-branch 子
-
-# 6/7/8/9 yao values (supports moving lines 6/9)
-orbit divination chart --yao 7 7 7 7 9 7 --day-stem 甲 --day-branch 子
-```
-
-The CLI echoes back a one-line proof of the deterministic output
-(本卦, 变卦, 卦宫 + 世/应, 6 lines × 纳甲/六亲/六神) so you can see
-the engine produced what you expected before sending it to the LLM.
-
-The bits/yao encoding is documented in the CLI's `--help` and in
-`docs/base_knowledge/装卦方法.md`.
-
-### Yao value encoding
-
-A 卦 (hexagram) is 6 lines stacked bottom-to-top (初爻 at position 1
-is the bottom line, 上爻 at position 6 is the top). Each line has
-two attributes: a yin/yang polarity and, for moving lines, a flip
-flag. OrbitAgent accepts two equivalent encodings:
-
-| Encoding | CLI form | Static lines | Moving lines | Notes |
-|---|---|---|---|---|
-| `bits` | `orbit divination chart 0 1 1 0 1 1` | `0` = 阴, `1` = 阳 | **not supported** | Simplest input — 0/1 per line bottom-to-top. Internally mapped to yao `8` (阴) and `7` (阳). No 老阳 / 老阴 so no moving lines. |
-| `yaoValues` | `orbit divination chart --yao 7 7 9 7 8 6` | `7` = 少阳, `8` = 少阴 | `9` = 老阳 (→ flips to 阴), `6` = 老阴 (→ flips to 阳) | Use this when you want moving lines. Output the 6 numbers bottom-to-top. |
-
-The 4 yao values come from the standard 火珠林 (Liu Yi) three-coin
-method. If you want to derive them yourself instead of letting the
-CLI do it:
-
-```
-3 coins (背面=0, 正面=1)        yao value   name    line
-0 back, 3 face   (交)            6          老阴    yin,  moving
-1 back, 2 face   (单)            7          少阳    yang, static
-2 back, 1 face   (拆)            8          少阴    yin,  static
-3 back, 0 face   (重)            9          老阳    yang, moving
+docs/
+  base_knowledge/                # 系统级六爻知识库语料
+  liuyao/KNOWLEDGE_NEEDED.md     # 规则数据和缺失知识跟踪清单
 ```
 
-So if you flip three coins and see 1 back + 2 face, that throw is
-少阳 = 7. Repeat 6 times to fill the 6 lines bottom-to-top. The CLI
-will accept the resulting sequence via `--yao`.
+## 完整使用说明
 
-**Direction matters.** The 6 numbers are always given **bottom
-line first** (初爻 → 上爻). `orbit divination chart 1 1 1 1 1 1`
-draws 乾 (six yang); `0 0 0 0 0 0` draws 坤 (six yin). Reversing
-the order gives the inverse hexagram.
+### 1. 环境准备
 
-**Examples**:
-
-```bash
-# 乾 (all yang, static)
-orbit divination chart 1 1 1 1 1 1
-
-# 坤 (all yin, static)
-orbit divination chart 0 0 0 0 0 0
-
-# 乾 with 1 moving line at position 3 (老阳 → flips to yin)
-orbit divination chart --yao 7 7 9 7 7 7
-
-# 坤 with 1 moving line at position 1 (老阴 → flips to yang)
-orbit divination chart --yao 6 8 8 8 8 8
-
-# Real 3-coin session: every throw is one yao value, bottom-up
-# e.g. throws came out 拆 拆 重 拆 单 单 → 8 8 9 8 7 7
-orbit divination chart --yao 8 8 9 8 7 7
-```
-
-**Why two encodings?** The `bits` form is the easy default for
-quick tests and for callers that don't care about moving lines (no
-六爻 reader asks "will I get the job" without wanting to know the
-动爻). The `yaoValues` form is what you use when you've actually
-flipped coins or when you want the engine to render a 变卦 with
-动爻化出.
-
----
-
-## Framework capabilities — what's behind the engine
-
-Beneath the liuyao subsystem, OrbitAgent is a single Express service
-with the standard pieces you'd expect for a production LLM backend.
-You don't need any of this to use the liuyao product; it's there when
-you want to extend.
-
-### Multi-LLM support
-
-10+ providers, 25+ models wired through one adapter interface
-([src/core/llm/](src/core/llm/)). Native adapters (`anthropic`,
-`openai`, `google`, `ollama`, `deepseek`) register when an API key is
-present; OpenAI-compatible adapters (`kimi`, `siliconflow`, `groq`,
-`together`, `perplexity`) share a single base class and register
-automatically when their `<PROVIDER>_API_KEY` env var is set. Model
-IDs are globally unique so the routing table is a single linear scan.
-
-Default liuyao agent uses `deepseek-v4-flash` — the system prompt +
-skill/tool list is ~1280 tokens and 100% hits the prompt cache, so
-cache-friendly pricing makes the per-cast analysis essentially free.
-
-### Multi-user isolation
-
-Every store that holds user-owned business data scopes by `userId`
-and rejects cross-user access:
-- `ChartStore` ([src/core/memory/ChartStore.ts](src/core/memory/ChartStore.ts)) —
-  one chart per `(userId, sessionId, chartKey)`, Mongo-backed with
-  a TTL index, throws on cross-user read attempts.
-- `PermanentMemory` — `Conversation` + `Message` collections scoped
-  by userId; permanent storage is opt-in via
-  `POST /api/v1/memory/permanent`.
-- RAG — `knowledge_documents` + `knowledge_chunks` collections with
-  `scope=system` (admin-managed) or `scope=user` (per-user uploads);
-  searches union system chunks with the caller's own user-scope
-  chunks only. See `tests/integration/multi-user-isolation.test.ts`
-  (13 cases covering the cross-user access matrix).
-
-### Agents, skills, tools, workflows
-
-- **Agents** ([configs/agents.yaml](configs/agents.yaml)) — declarative
-  YAML registry; ships with `default` (= liuyao), `generic`, and
-  `coding` agents. Add a new agent: append to `agents.yaml`, drop a
-  prompt at `prompts/system/<id>.yaml`, restart.
-- **Skills** — preprocessing hooks in the chat pipeline; built-ins
-  live in `src/core/skills/builtins/`. CLI exposes
-  `orbit skill install <url|text>` and `orbit skill uninstall <id>`
-  (admin only).
-- **Tools** — `divination` (liuyao), `filesystem`, `search`, plus
-  MCP servers declared in `config.yaml`. Per-agent tool filtering
-  means the liuyao agent only sees `divination`; the `coding` agent
-  sees `filesystem` and `search`.
-- **Workflows** — YAML definitions in `configs/workflows/`, hot
-  reloaded every 60s.
-
-### Auth
-
-Dual scheme: `X-API-Key` (hashed, permission-scoped) and JWT
-(`Authorization: Bearer …`). Both middlewares are non-blocking by
-default and chain together; admin routes add `adminOnly`. The `orbit
-login --dev` path mints a 30-day JWT for the seeded dev user so you
-can exercise the API without a full auth flow.
-
-In dev (`NODE_ENV !== 'production'`) two users are auto-seeded:
-- Admin: `admin@orbit.local` / `orbit_admin_2026`
-- Test: `dev@test.local` / `devpassword123`
-
----
-
-## Quick start
-
-### Prerequisites
+需要：
 
 - Node.js 18+
-- MongoDB (default `mongodb://localhost:27017/orbit_agent`)
-- Redis (default `redis://localhost:6379`)
+- MongoDB，默认 `mongodb://localhost:27017/orbit_agent`
+- Redis，默认 `redis://localhost:6379`
+- 至少一个 LLM API key。默认配置使用 DeepSeek。
+
+macOS 本地服务示例：
 
 ```bash
-# macOS
 brew services start mongodb-community
 brew services start redis
 ```
 
-### Install + run
+安装依赖并配置环境：
 
 ```bash
 npm install
-cp .env.example .env          # fill in at least one LLM API key
-npm run dev                   # ts-node + dotenv hot-load
+cp .env.example .env
 ```
 
-Server runs at `http://localhost:3000`. Health: `GET /api/v1/health`.
-
-### First liuyao session in 3 commands
+至少在 `.env` 中配置一个可用 provider，例如：
 
 ```bash
-# 1. Get a dev JWT
-TOKEN=$(curl -s -X POST http://localhost:3000/api/v1/dev/token | jq -r .data.accessToken)
-
-# 2. Cast a chart
-curl -X POST http://localhost:3000/api/v1/divination/chart \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"bits":[1,1,1,1,1,1], "sessionId":"sess_demo",
-       "dayStem":"甲", "dayBranch":"子",
-       "question":"Will this investment pay off?"}'
-
-# 3. Ask the agent to interpret
-curl -X POST http://localhost:3000/api/v1/chat \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"sessionId":"sess_demo", "message":"Will this investment pay off?"}'
+DEEPSEEK_API_KEY=your_key
+JWT_SECRET=replace_me_in_real_env
+MONGODB_HOST=localhost
+MONGODB_DATABASE=orbit_agent
+REDIS_HOST=localhost
 ```
 
-### CLI
+启动开发服务：
 
 ```bash
-# install the binary
-npm run build && npm link
+npm run dev
+```
 
-# login (dev)
+默认服务地址：
+
+```text
+http://localhost:3000
+http://localhost:3000/api/v1/health
+http://localhost:3000/api/v1/status/page
+```
+
+### 2. CLI 指令完整说明
+
+构建并链接 CLI：
+
+```bash
+npm run build
+npm link
+```
+
+CLI 是 REST API 的薄客户端，不在本地重写业务逻辑。状态默认存在 `~/.orbit/`：
+
+```text
+~/.orbit/config.json    # baseUrl、默认 provider/model
+~/.orbit/token.json     # 登录 JWT，后续命令自动带 Authorization
+```
+
+也可以用环境变量覆盖：
+
+```bash
+ORBIT_HOME=/tmp/orbit-demo
+ORBIT_BASE_URL=http://127.0.0.1:3000/api/v1
+ORBIT_PROVIDER=deepseek
+ORBIT_MODEL=deepseek-v4-flash
+```
+
+#### 2.1 基础配置和登录
+
+| 指令 | 作用 |
+|---|---|
+| `orbit` | 显示当前 base URL、home、登录用户 |
+| `orbit --help` | 查看顶层帮助 |
+| `orbit config show` | 查看 CLI 当前配置 |
+| `orbit config set-base <url>` | 设置后端 API 地址，例如 `http://127.0.0.1:3000/api/v1` |
+| `orbit config set-model <provider> <model>` | 设置 CLI 默认 provider/model |
+| `orbit login --dev` | 开发环境直接获取 dev JWT |
+| `orbit login --email <email> --password <password>` | 使用账号密码登录 |
+| `orbit logout` | 清除本地 token |
+| `orbit whoami` | 查看当前登录用户 |
+
+常用初始化：
+
+```bash
+orbit config set-base http://127.0.0.1:3000/api/v1
 orbit login --dev
-
-# cast + chat
-orbit divination chart 1 1 1 1 1 1 --day-stem 甲 --day-branch 子 \
-  --question "Will this investment pay off?" --session sess_demo
-orbit chat --session sess_demo "Analyze it for me"
+orbit whoami
 ```
 
-The `orbit` binary is a thin client over the same REST API; it
-doesn't re-implement any business logic. State lives in `~/.orbit/`
-(overridable via `ORBIT_HOME`).
-
-### RAG: ingest your own liuyao knowledge
+开发环境登录：
 
 ```bash
-# upload a markdown file (becomes user-scope, private to you)
-orbit divination rag upload my-notes.md
-orbit divination rag list
-
-# admin can add to the system knowledge base
-orbit divination rag upload my-system-doc.md --system
+orbit login --dev
 ```
 
----
+#### 2.2 六爻完整流程
 
-## Configuration
+| 指令 | 作用 |
+|---|---|
+| `orbit divination cast <b1> ... <b6>` | 只做 6 个 `0/1` bit 的起卦归一，输出 CastResult |
+| `orbit divination chart [bits...]` | 生成完整 ChartResult，并存入 session |
+| `orbit divination chart --yao <v1> ... <v6>` | 用 `6/7/8/9` 爻值排盘，支持动爻 |
+| `orbit divination brief --session <id>` | 读取结构化 ChartBrief，不调用 LLM |
+| `orbit divination brief --session <id> --json` | 输出完整 JSON brief |
+| `orbit divination analyze <chart.json>` | 读取本地 chart JSON 并直接跑分析 Agent |
+| `orbit divination analyze <chart.json> --debug` | 显示 brief、理解、RAG、综合阶段 timeline |
+| `orbit chat --session <id> "<message>"` | 在已有卦盘 session 中多轮追问 |
+| `orbit chat --session <id> "<message>" --debug` | 显示 chat 中触发的六爻分析 pipeline |
 
-[config.yaml](config.yaml) is the source of truth for shape; use
-[.env](.env) only for secrets and host/port overrides. `config.yaml`
-substitutes `${VAR}` and `${VAR:default}` placeholders against
-`process.env` and validates the merged tree with zod.
+`chart` 常用参数：
 
-Provider model lists declared in `config.yaml` drive the
-`/api/v1/models` API output.
+| 参数 | 说明 |
+|---|---|
+| `-q, --question <text>` | 用户问题，用于用神和报告分析 |
+| `--question-type <type>` | 手动指定问题类型，例如 `求财`、`求事业` |
+| `--day-stem <stem>` | 手动指定日干，例如 `甲` |
+| `--day-branch <branch>` | 手动指定日支，例如 `子` |
+| `--month-branch <branch>` | 手动指定月支 |
+| `--datetime <iso>` | 指定起卦时间；不传则默认当前时间 |
+| `--timezone <tz>` | 指定时区，例如 `Asia/Shanghai` |
+| `-s, --session <id>` | 保存卦盘的 session id |
+| `--chart-key <key>` | 同一 session 下的卦盘名称，默认 `default` |
+| `--yao` | 把 6 个位置参数解释为 `6/7/8/9` 爻值，而不是 `0/1` bits |
 
-Per-model token pricing (USD per million tokens, including
-`cacheHitPricePerM` for prompt-cache hits) lives in
-[src/models/TokenUsage.ts](src/models/TokenUsage.ts) — add new
-model pricing there, not in `config.yaml`.
-
----
-
-## API surface (the bits you actually call)
-
-All routes mounted under `app.apiPrefix` (default `/api/v1`).
-Authenticated routes accept either `Authorization: Bearer <jwt>` or
-`X-API-Key: …`. Response envelope: `{ success, data?, error?: { code, message, details? } }`.
-
-| Method | Path | Notes |
-|---|---|---|
-| `POST` | `/divination/chart` | 6 bits or 6 yao values + dayStem/dayBranch → fully-decorated chart, persisted in ChartStore under the session. |
-| `POST` | `/divination/analyze` | Reads a stored chart by sessionId (or accepts an inline chart) → AnalysisReport. |
-| `GET` | `/divination/chart/keys/:sessionId` | List chart keys stored for the caller's session. |
-| `POST` | `/divination/rag/upload` | Ingest a markdown doc (user-scope; admin can pass `scope=system`). |
-| `GET` | `/divination/rag/list` | List docs the caller can see. |
-| `POST` | `/divination/rag/search` | Top-k chunks (scoped). |
-| `DELETE` | `/divination/rag/:source` | Delete a doc (bare filename accepted, server-resolves). |
-| `POST` | `/chat` | Main chat. `agentId` defaults to `default` (= liuyao). |
-| `POST` | `/chat/stream` | SSE streaming. |
-| `POST` | `/auth/login` / `/auth/register` | JWT auth. |
-| `GET` / `POST` | `/users/*` | Profile, check-in streaks, ritual task history, public feed. |
-| `GET` | `/models` | List available models. |
-| `GET` | `/models/health` | LLM provider health table. |
-| `GET` | `/usage/stats` | Token usage summary + byModel + daily. |
-| `GET` | `/health` | `{ status: "healthy", uptime }`. |
-| `POST` | `/dev/token` | (dev only) Get a JWT without login. |
-
-Error code namespaces: `1000=auth`, `2000=validation`, `3000=resource`,
-`4000=LLM`, `5000=memory`, `6000=skills`, `7000=tools`, `8000=workflow`,
-`9000=system`. See [API_DOC.md](API_DOC.md) for the full list.
-
----
-
-## Project structure
-
-```
-src/
-  app.ts                       # Application class — wires middleware,
-                               # routes, services, runs startup health checks
-  liuyao/                      # liuyao subsystem (default product)
-    skills/                    # 13 deterministic skills
-      chartAssembler.ts        #   orchestrates the 13 in fixed order
-      castSkill.ts             #   6 bits/yaoValues → 6 爻值
-      hexagramSkill.ts         #   bit pattern → 64-hexagram table lookup
-      palaceSkill.ts           #   palace + 世/应
-      najiaSkill.ts            #   纳甲 (stem + branch + element)
-      sixRelativeSkill.ts      #   六亲 (五行生克)
-      sixGodSkill.ts           #   六神 (day stem → starting god)
-      voidSkill.ts             #   旬空 + mark empty lines
-      branchRelationSkill.ts   #   冲/合/刑/害 (P2 stub)
-      transformationSkill.ts   #   动爻化出 (P2 stub)
-      yongshenSkill.ts         #   用神候选 (P2 stub)
-      strengthSkill.ts         #   旺衰 labels (P2 stub)
-      fushenSkill.ts           #   伏神 (P2 stub)
-    agent/
-      analysisAgent.ts         #   runAnalysisAgent — 3-stage pipeline
-      chartBrief.ts            #   buildChartBrief — structured material
-      reportTemplate.ts        #   6/9-section report builder
-      questionClassifier.ts    #   question type → 用神 hint
-    rag/
-      index.ts                 #   Mongo-backed RAG with per-user scoping
-    constants/                 # chart tables: 64-hexagrams, 纳甲, 五行, ...
-    types/                     # chart TypeScript types (basic, chart, skill, agent)
-  core/
-    llm/                       # Multi-provider LLM adapters
-    memory/                    # TemporaryMemory (Redis) + ChartStore (Mongo)
-    agents/                    # AgentLoader (configs/agents.yaml)
-    skills/                    # Generic skill pipeline (chat preprocessing)
-    tools/                     # divination, filesystem, search, MCP
-    workflow/                  # YAML workflow engine
-    prompts/                   # System prompt loader
-  users/                       # user subsystem (ritual tasks, profile, feed)
-  routes/                      # Express routes (chat, auth, divination, ...)
-  models/                      # Mongoose models
-  services/                    # database, DevAuth, TokenService, SkillInstaller
-  middleware/                  # auth, errorHandler
-  cli/                         # `orbit` binary (thin client over REST)
-
-docs/
-  base_knowledge/              # liuyao knowledge base (system-scope RAG corpus)
-    64卦数据.json              #   the 64-hexagram table (canonical source)
-    装卦方法.md                #   装卦 + 装六亲 + 装六神 rules
-    六爻卦理.md                #   六爻卦理 reference
-    六爻基础.md                #   intro
-    六爻用神.md                #   用神 rules
-    实例应用.md                #   worked examples
-    排盘补充.md                #   排盘 supplement (干支, 五虎五鼠遁, 旬空, 64卦详表)
-    易经详解（上/下）.md       #   易经详解
-    精华荟萃（上/下篇）.md     #   精华
-    起卦方法.md                #   起卦
-
-design.md                      # system design doc (排盘 flow + skill list)
-CLAUDE.md                      # project notes for AI assistants
-```
-
----
-
-## Development
+起卦并存入 session：
 
 ```bash
-npm run dev          # ts-node + dotenv hot-load
-npm run build        # tsc → dist/
-npm run typecheck    # tsc --noEmit
-npm run lint         # eslint
-npm run test         # jest
-npm run test:unit    # unit only (76/76 pass — covers 排盘 first step)
-npm run test:integration  # integration only (28/28 pass — needs live Mongo + Redis)
-```
-
-Path aliases (`@core/*`, `@config/*`, `@routes/*`, …) are defined in
-both [tsconfig.json](tsconfig.json) and [jest.config.js](jest.config.js) —
-update both when adding a new alias.
-
----
-
-## Test scenario — the big-tech offer
-
-A reproducible end-to-end scenario that exercises the full multi-stage
-analysis pipeline. Use it to sanity-check that everything still works
-after a refactor, or as a guided walkthrough of the system.
-
-> **Story**: A backend engineer with two years of experience has just
-> received an offer for a senior role at a large tech company. The
-> on-site is scheduled for next Tuesday. They've been going back and
-> forth on whether to accept, so they sit down with the coins.
->
-> **Question**: *"Should I accept the senior engineer offer at the
-> big tech company?"*
->
-> **Cast time**: Right now (Asia/Shanghai). Pass `--datetime` to
-> override.
->
-> **Expected analytic angles**:
-> - 官鬼 (official-ghost) is the primary 用神 (target spirit) — it
->   represents the position / offer itself.
-> - 世爻 (world line) tells the querent's own state; this scenario
->   has the world on line 4, sitting in 旬空 (xunkong / void).
-> - 应爻 (response line) is the employer / team.
-> - The 4th line moves (老阳 → flips to 申 metal 父母), so the chart
->   has a real transformation to read.
-
-### 1. Cast the chart
-
-```bash
-# 6 coins = yao values 7 8 7 9 7 8 (one 老阳 at position 4 → moving).
-# Don't pass --day-stem / --day-branch — let the engine derive them
-# from --datetime via the lunar-typescript calendar skill.
-orbit divination chart --yao 7 8 7 9 7 8 \
-  --datetime "$(TZ='Asia/Shanghai' date '+%Y-%m-%dT%H:%M:%S+08:00')" \
-  --timezone 'Asia/Shanghai' \
-  --question "Should I accept the senior engineer offer at the big tech company?" \
-  --session sess_scenario_en
-```
-
-Engine output:
-
-```
-time:   丙午年 / 癸巳月 / 己酉日 / 癸酉时
-旬空:  寅、卯    节气: 小满
-palace:  坎宫 · 四世 · 水
-shi/ying:  4/1
-moving:  4
-
-本卦 革     变卦 既济
-世爻 = 第 4 爻 (亥 兄弟，旬空，动)
-应爻 = 第 1 爻 (卯 子孙)
-```
-
-Notes on the chart:
-- **革 → 既济** (Revolution → After Completion). Ge is about decisive
-  change; Ji Ji literally means "already crossed" — a strong symbolic
-  pairing for "should I take this leap."
-- **世爻 旬空**: the querent's own line is void this cycle. The
-  classical line "世居空地，终身作事无成" is exactly the warning
-  signal here, but the LLM has to weigh it against the moving-line
-  transformation (亥 → 申, 父母 回头生).
-- **应爻 卯 vs 日辰 酉**: 应 clashes with day branch — the role or
-  team may itself be in flux.
-
-You can re-cast with a different time to see how the engine reacts:
-
-```bash
-# Cast at 3am — different 旬空, different 旺衰 labels
-orbit divination chart --yao 7 8 7 9 7 8 \
-  --datetime "2026-06-05T03:15:00+08:00" \
-  --timezone 'Asia/Shanghai' \
-  --question "Should I accept the senior engineer offer?" \
-  --session sess_scenario_en_3am
-```
-
-### 2. Inspect the structured brief (no LLM cost)
-
-```bash
-# The deterministic ChartBrief — exactly the doc that gets fed to
-# LLM #1 in the analyze pipeline. Useful for verifying the engine
-# produced what you expected.
-orbit divination brief --session sess_scenario_en
-
-# Raw JSON if you want the full structured object:
-orbit divination brief --session sess_scenario_en --json
-```
-
-### 3. Run the full 3-stage pipeline
-
-```bash
-# Without --debug: just the LLM's final answer
-orbit chat --session sess_scenario_en "Should I accept the offer?"
-
-# With --debug: full timeline — build brief → LLM #1 understand →
-# RAG retrieve → LLM #2 synthesize
-orbit chat --session sess_scenario_en "Should I accept the offer?" --debug
-```
-
-Expected `--debug` output (numbers vary by LLM provider; the shape
-is what matters). Note: the LLM's analysis text comes back in
-Chinese because the agent's system prompt and knowledge base are
-in Chinese — this is intentional, since the product itself is a
-Chinese liuyao reader. The LLM's `refinedQuestionType` /
-`focusYongshen` / RAG queries are all in Chinese 六爻 terminology
-(求事业, 官鬼, 世爻空亡, etc.) — they're proper-noun tokens, not
-prose to translate:
-
-```
-Pipeline timeline
-──────────────────────────────────────────────────────────
-①  Build ChartBrief           0ms    lines=6
-②  LLM #1 — Understand         ~7s   deepseek-v4-flash in=800 out=600
-  [Understanding stage output]
-    Refined question type: 求事业  (career)
-    Focus 用神: 官鬼  (official-ghost, = the position itself)
-    LLM-proposed RAG queries (3-4):
-      · 六爻 工作 offer 官鬼 用神
-      · 世爻空亡 动化回头生 事业
-      · 官鬼两现 取用原则
-      · 应爻冲 工作 变动
-③  RAG retrieve                ~1s   queries=8 hits=32 deduped=7
-  [RAG hits]
-    Each query:
-      · 六爻 工作 offer 官鬼 用神   hits=4  topScore=0.595
-      · 世爻空亡 动化回头生 事业     hits=4  topScore=0.669
-      · 官鬼两现 取用原则            hits=4  topScore=0.651
-      · 应爻冲 工作 变动             hits=4  topScore=0.613
-    Deduped top-k (with provenance):
-      - 增删卜易.md            score=0.679 ← [六爻 其他]
-      - 精华荟萃（下篇）.md    score=0.664 ← [世爻空亡 动化回头生 事业]
-      - 实例应用.md            score=0.645 ← [六爻 其他]
-      - 精华荟萃（上篇）.md    score=0.614 ← [六爻 其他]
-      - 易经详解（下）.md      score=0.487 ← [革]
-      - 装卦方法.md            score=0.477 ← [父母]
-      - 易经详解（上）.md      score=0.397 ← [革]
-④  LLM #2 — Synthesize         ~20s  deepseek-v4-flash in=3000 out=1800
-──────────────────────────────────────────────────────────
-Total: ~29s
-```
-
-### 4. Stand-alone analyze (bypasses /chat, hits the same code path)
-
-```bash
-# Save the chart JSON to a file first (any cast will do)
 orbit divination chart --yao 7 8 7 9 7 8 \
   --datetime "2026-06-04T18:45:00+08:00" \
-  --timezone 'Asia/Shanghai' \
-  --question "Should I accept the senior engineer offer?" \
-  --session sess_scenario_en_file 2>&1 | tail -20
-
-# Then run analyze directly on the chart. This goes through the same
-# 3-stage pipeline (brief → understand → RAG → synthesize) — just
-# without the chat-loop wrapper. Add --debug to see the timeline.
-orbit divination analyze <chart.json> --debug
+  --timezone "Asia/Shanghai" \
+  --question "我是否应该接受这份新工作 offer？" \
+  --session sess_offer_demo
 ```
 
-### Health-check checklist
+先看不消耗 LLM 的结构化 brief：
 
-Run the scenario, then walk this table to confirm the system is healthy:
+```bash
+orbit divination brief --session sess_offer_demo
+orbit divination brief --session sess_offer_demo --json
+```
 
-| Check | Expected |
+让 Agent 解读：
+
+```bash
+orbit chat --session sess_offer_demo "请结合卦象分析这个 offer 是否值得接受"
+```
+
+查看多阶段 pipeline：
+
+```bash
+orbit chat --session sess_offer_demo "请详细分析" --debug
+```
+
+启用 **thinking 模式**（多角度分析，详见下节）：
+
+```bash
+orbit chat --session sess_offer_demo "请详细分析" --thinking --debug
+orbit chat --session sess_offer_demo "请详细分析" --thinking --angles 4 --debug
+```
+
+只验证排盘，不进 LLM：
+
+```bash
+orbit divination chart 1 1 1 1 1 1 \
+  --day-stem 甲 \
+  --day-branch 子 \
+  --session sess_static_qian
+
+orbit divination brief --session sess_static_qian
+```
+
+指定 chartKey 保存多个卦盘：
+
+```bash
+orbit divination chart --yao 7 8 7 9 7 8 \
+  --session sess_compare \
+  --chart-key first \
+  --question "方案一是否可行？"
+
+orbit divination chart --yao 8 8 9 8 7 7 \
+  --session sess_compare \
+  --chart-key second \
+  --question "方案二是否可行？"
+
+orbit divination brief --session sess_compare --chart-key second
+```
+
+#### 2.3 Chat 指令
+
+| 指令 | 作用 |
 |---|---|
-| Correct model in footer | `orbit chat ...` ends with `[deepseek-v4-flash/deepseek • ...]`, **not** `[glm-.../zhipu • ...]` |
-| Time block has all 4 pillars | Chart output shows `丙午年 / 癸巳月 / 己酉日 / 癸酉时` |
-| Brief covers all 6 lines | `orbit divination brief` shows 6 lines of `- 第 N 爻 ...` |
-| LLM #1 refines the question type | `--debug` timeline shows `Refined question type: 求事业` or similar |
-| LLM #1 picks a sensible focus 用神 | Timeline shows `Focus 用神: 官鬼` (for this scenario) |
-| RAG recall produces hits | Timeline shows `deduped=N` with N > 0 |
-| Recall hits have source paths | `Deduped top-k` lines include `docs/base_knowledge/*.md` |
-| Report contains `[cite: ...]` tags | LLM #2's final answer has at least 1 `[cite:` tag |
-| Prompt cache hit on LLM #2 | `cacheHit > 0` on the synthesize call (the system prompt is stable) |
+| `orbit chat "你好"` | 普通对话，默认 agent 是六爻 agent |
+| `orbit chat --agent generic "你好"` | 使用 generic agent，避免六爻行为 |
+| `orbit chat --session <id> "<message>"` | 复用同一个 session 多轮对话 |
+| `orbit chat --stream "<message>"` | SSE 流式输出 |
+| `orbit chat --model <model> --provider <provider> "<message>"` | 单次覆盖模型 |
+| `orbit chat --system "<text>" "<message>"` | 临时追加 system prompt |
+| `echo "..." \| orbit chat` | 从 stdin 读取消息 |
 
-If any check fails:
-- **Model is wrong**: your `~/.orbit/config.json` may still have
-  `defaultProvider: zhipu`; the CLI passes it through unless you
-  type `--model` explicitly. Either delete the file or pass
-  `--model deepseek-v4-flash` per call.
-- **RAG deduped = 0**: the embedder is probably the default hash
-  embedder. Set `ORBIT_EMBEDDER=remote-zhipu` in `.env` and restart
-  the server. The hash embedder is dependency-free but its recall
-  is mediocre.
-- **`cacheHit = 0`**: something is varying the system prompt between
-  calls (e.g. a timestamp). Check `prompts/system/liuyao-agent.yaml`
-  for any non-static content.
+示例：
 
----
+```bash
+orbit chat --agent generic "用一句话介绍 OrbitAgent"
+orbit chat --session sess_offer_demo "刚才这个卦，如果我延后一周再答复呢？"
+echo "请总结这个报告" | orbit chat --agent generic
+```
 
-## Status
+#### 2.4 RAG 知识库指令
 
-**First-step chart assembly**: complete. The deterministic engine
-produces a fully-decorated chart for any of the 64 hexagrams (bits
-or yaoValues input, with or without dayStem/dayBranch); no
-`warnings[]` for the first-step data. dayStem/dayBranch/monthBranch/
-hourBranch/xunkong are auto-derived from the caller's `datetime`
-(or "now") via the [lunar-typescript](https://www.npmjs.com/package/lunar-typescript)
-calendar skill (`src/liuyao/skills/calendarSkill.ts`); the time
-block + xunkong are injected into the agent's system prompt so
-the LLM can reason about 旺衰/冲合/动爻回头生克 from the actual
-cast time.
+| 指令 | 作用 |
+|---|---|
+| `orbit divination rag list` | 列出当前用户可见的系统文档和私有文档 |
+| `orbit divination rag stats` | 查看 chunk/document 数量 |
+| `orbit divination rag search <query...>` | 检索知识库 |
+| `orbit divination rag search <query...> -k <n>` | 指定 top-k |
+| `orbit divination rag upload <file.md>` | 上传私有 markdown 文档 |
+| `orbit divination rag upload <file.md> --system` | 管理员上传系统级文档 |
+| `orbit divination rag delete <source>` | 删除文档，source 从 `rag list` 复制 |
+| `orbit divination rag rebuild` | 重建系统 RAG 索引 |
 
-**RAG**: the system corpus (`docs/base_knowledge/*.md`) is
-auto-bootstrapped on every server start (see [src/app.ts](src/app.ts))
-with a **contentHash cache** so only files whose body changed get
-re-embedded. Default embedder is **Zhipu Embedding-3** (2048d,
-OpenAI-compatible endpoint at `open.bigmodel.cn/api/paas/v4`,
-0.5 元/Mtok). Swap with `ORBIT_EMBEDDER=hash` for dependency-free
-local dev.
+示例：
 
-**Agent layer**: ships a working `default` agent that runs the
-3-stage analysis pipeline (build brief → LLM #1 understand → RAG
-retrieve → LLM #2 synthesize) → RAG-cited 6/9-section report. The
-LLM is wired to refuse to recompute any chart field; it can only
-interpret what's in the ChartResult.
+```bash
+orbit divination rag list
+orbit divination rag search "世爻空亡 动化回头生" -k 5
+orbit divination rag upload my-notes.md
+orbit divination rag upload docs/base_knowledge/新增卦例.md --system
+orbit divination rag delete "my-notes.md"
+```
 
-**P2 work** (still TODO, surfaces as `warnings[]` on the chart
-response): full 冲/合/刑/害/破 rules, full 用神 candidate rules,
-quantitative 旺衰 scoring, 伏神/飞神, 化进/化退.
+#### 2.5 模型、用量、工具和 workflow
 
-The chart pipeline's stage-by-stage table of which data is sourced
-externally vs. computed inline is tracked in
-`docs/liuyao/KNOWLEDGE_NEEDED.md` (P0 = 64-hexagram table, ✅).
+模型与用量：
 
----
+| 指令 | 作用 |
+|---|---|
+| `orbit models` | 列出可用模型 |
+| `orbit models --provider deepseek` | 只看某个 provider 的模型 |
+| `orbit models --ids` | 只输出 model id，方便脚本使用 |
+| `orbit health` | 查看 LLM provider 健康状态 |
+| `orbit defaults` | 查看服务端默认 provider/model |
+| `orbit switch <provider> <model>` | 切换服务端默认模型，并同步到本地 CLI config |
+| `orbit usage` | 查看 token 用量统计 |
+| `orbit pricing` | 查看模型价格表 |
 
-## Glossary
+示例：
 
-The README keeps the canonical Chinese terms untranslated because
-they are the same identifiers used in the code, CLI flags, system
-prompts, and the dev token. The LLM's analysis output also comes
-back in Chinese because the agent's system prompt and knowledge
-base are in Chinese. This glossary maps the English descriptions
-used in the prose to the proper-noun tokens you'll see throughout
-the codebase:
+```bash
+orbit models --provider deepseek
+orbit health
+orbit defaults
+orbit switch deepseek deepseek-v4-flash
+orbit usage
+orbit pricing
+```
 
-| Chinese | English | Notes |
+工具和 workflow：
+
+| 指令 | 作用 |
+|---|---|
+| `orbit tools` | 列出已注册 tools 和入参 schema |
+| `orbit exec <toolName> -p '<json>'` | 执行 tool |
+| `orbit workflows` | 列出已加载 workflow |
+| `orbit workflow-run <name> -c '<json>'` | 执行 workflow |
+
+示例：
+
+```bash
+orbit tools
+orbit exec filesystem -p '{"operation":"list","path":"."}'
+orbit exec search -p '{"query":"六爻 回头生克","limit":3}'
+orbit workflows
+orbit workflow-run conversation -c '{"input":"你好"}'
+```
+
+说明：`divination` tool 主要给 chat-loop 内部使用，`analyze` / `inspect` 需要由 `/chat` 绑定当前用户和 session。命令行里做六爻分析时优先用 `orbit divination chart`、`orbit divination brief`、`orbit divination analyze` 或 `orbit chat --session <id>`。
+
+#### 2.6 Skill 管理指令
+
+这里的 `skills` 和 `skill` 是两组命令：
+
+- `orbit skills`：查看当前服务加载的 skills。
+- `orbit skill ...`：管理员安装、卸载、查看、重载 skill 文件。
+
+| 指令 | 作用 |
+|---|---|
+| `orbit skills` | 列出已加载 skills |
+| `orbit skill installed` | 列出服务器已安装 skills |
+| `orbit skill show <id>` | 打印某个 skill 的 markdown 文件 |
+| `orbit skill install <path-or-url>` | 从本地路径或 URL 安装 skill |
+| `orbit skill install ignored --inline '<markdown>' --filename demo.md` | 以内联 markdown 安装 |
+| `orbit skill uninstall <id>` | 卸载 skill，管理员权限 |
+| `orbit skill reload` | 重扫 skill 目录 |
+
+示例：
+
+```bash
+orbit skills
+orbit skill installed
+orbit skill show context-enrichment
+orbit skill install ./skills/my-skill.md
+orbit skill reload
+```
+
+### 3. 起卦输入规则
+
+六爻顺序永远是 **初爻到上爻，自下而上**。
+
+`bits` 适合静卦：
+
+```bash
+orbit divination chart 1 1 1 1 1 1 --session sess_qian
+orbit divination chart 0 0 0 0 0 0 --session sess_kun
+```
+
+`yaoValues` 适合真实三枚铜钱起卦，支持动爻：
+
+| 爻值 | 名称 | 阴阳 | 动静 |
+|---|---|---|---|
+| `6` | 老阴 | 阴 | 动，变阳 |
+| `7` | 少阳 | 阳 | 静 |
+| `8` | 少阴 | 阴 | 静 |
+| `9` | 老阳 | 阳 | 动，变阴 |
+
+示例：
+
+```bash
+# 第 3 爻老阳动
+orbit divination chart --yao 7 7 9 7 7 7 --session sess_moving_3
+
+# 第 1 爻老阴动
+orbit divination chart --yao 6 8 8 8 8 8 --session sess_moving_1
+```
+
+### 4. 使用 REST API
+
+开发环境可以直接拿 dev token：
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:3000/api/v1/dev/token | jq -r .data.accessToken)
+```
+
+创建并保存卦盘：
+
+```bash
+curl -X POST http://localhost:3000/api/v1/divination/chart \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sessionId": "sess_api_demo",
+    "chartKey": "default",
+    "yaoValues": [7,8,7,9,7,8],
+    "datetime": "2026-06-04T18:45:00+08:00",
+    "timezone": "Asia/Shanghai",
+    "question": "我是否应该接受这份新工作 offer？"
+  }'
+```
+
+读取 brief：
+
+```bash
+curl http://localhost:3000/api/v1/divination/brief/sess_api_demo \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+直接分析：
+
+```bash
+curl -X POST http://localhost:3000/api/v1/divination/analyze \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sessionId": "sess_api_demo",
+    "debug": true
+  }'
+```
+
+通过 chat 多轮对话：
+
+```bash
+curl -X POST http://localhost:3000/api/v1/chat \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sessionId": "sess_api_demo",
+    "message": "请结合世应、用神和动爻详细分析"
+  }'
+```
+
+上传私有知识：
+
+```bash
+curl -X POST http://localhost:3000/api/v1/divination/rag/upload \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "filename": "my-case-notes.md",
+    "body": "# 我的卦例\n..."
+  }'
+```
+
+系统级知识需要管理员账号，并传 `scope: "system"`。
+
+### 5. 主要 API
+
+所有路由默认挂在 `/api/v1`。
+
+| Method | Path | 作用 |
 |---|---|---|
-| 本卦 | original hexagram | the hexagram as cast |
-| 变卦 | changed hexagram | the hexagram after flipping moving lines |
-| 纳甲 | stem-branch assignment | the canonical 装纳甲 mapping of stems/branches to lines |
-| 六亲 | six relatives | 父母/兄弟/子孙/妻财/官鬼 — derived from palaceElement vs lineElement |
-| 六神 | six gods | 青龙/朱雀/勾陈/螣蛇/白虎/玄武 — derived from dayStem |
-| 世爻 / 应爻 | world line / response line | the two key markers in any hexagram |
-| 用神 | target spirit | the 六亲 the answer hinges on (e.g. 官鬼 for career) |
-| 旬空 | xunkong / void | the 12-day window when a stem-branch pair is "empty" |
-| 动爻 | moving line | yao values 6 (old yin) or 9 (old yang) — flips in the 变卦 |
-| 旺衰 | strong / weak | a line's seasonal strength (旺/相/休/囚/死) |
-| 冲合 | clash / combine | branch-to-branch relations (六冲, 六合, 三合, etc.) |
-| 回头生/克 | reciprocating 生/克 | what a moving line's resulting branch does to the original |
-| 父母 / 兄弟 / 子孙 / 妻财 / 官鬼 | parent / sibling / child / wife-wealth / official-ghost | the five 六亲 categories |
-| 甲 / 乙 / 丙 / 丁 / ... | the 10 Heavenly Stems | dayStem / monthStem / yearStem / hourStem |
-| 子 / 丑 / 寅 / ... | the 12 Earthly Branches | dayBranch / monthBranch / yearBranch / hourBranch |
-| 64 卦 / 八宫 | 64 hexagrams / 8 palaces | the full hexagram table grouped by parent palace |
+| `POST` | `/dev/token` | 开发环境获取 JWT |
+| `POST` | `/auth/register` | 注册用户 |
+| `POST` | `/auth/login` | 登录获取 JWT |
+| `POST` | `/divination/cast` | 只做 6 bits 起卦归一 |
+| `POST` | `/divination/chart` | 生成完整 ChartResult，并保存到 ChartStore |
+| `GET` | `/divination/brief/:sessionId` | 读取结构化 ChartBrief，不调用 LLM |
+| `GET` | `/divination/chart/keys/:sessionId` | 查看当前用户在 session 下的 chartKey |
+| `POST` | `/divination/analyze` | 直接分析 chart 或 session 中的最新 chart |
+| `POST` | `/divination/rag/upload` | 上传 markdown 知识文档 |
+| `GET` | `/divination/rag/list` | 查看可见知识文档 |
+| `POST` | `/divination/rag/search` | 检索知识库 |
+| `DELETE` | `/divination/rag/:source` | 删除自己或管理员有权删除的文档 |
+| `POST` | `/chat` | 主对话接口 |
+| `POST` | `/chat/stream` | SSE 流式对话 |
+| `GET` | `/models` | 模型列表 |
+| `GET` | `/models/health` | provider 健康检查 |
+| `GET` | `/usage/stats` | token 和成本统计 |
+| `GET` | `/status/page` | 状态页面 |
+| `GET` | `/docs` | API 文档页面 |
 
----
+认证支持：
+
+```text
+Authorization: Bearer <jwt>
+X-API-Key: <api-key>
+```
+
+响应统一为：
+
+```json
+{
+  "success": true,
+  "data": {}
+}
+```
+
+或：
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "..."
+  }
+}
+```
+
+### 6. 配置说明
+
+`config.yaml` 是结构配置源，`.env` 只放密钥和环境覆盖项。
+
+关键配置：
+
+- `app.host` / `app.port` / `app.apiPrefix`
+- `database.mongodb.*`
+- `redis.*`
+- `llm.defaultProvider`
+- `llm.defaultModel`
+- 各 provider 的 models 列表
+- MCP tools、agents、workflows 的 YAML 配置
+
+RAG embedder 通过环境变量切换：
+
+```bash
+ORBIT_EMBEDDER=remote-zhipu
+# 或本地无依赖开发
+ORBIT_EMBEDDER=hash
+```
+
+### 7. 开发命令
+
+```bash
+npm run dev
+npm run build
+npm run start
+npm run typecheck
+npm run lint
+npm run test
+npm run test:unit
+npm run test:integration
+```
+
+集成测试需要 MongoDB 和 Redis 可用。
+
+## 分析 Agent 与 thinking 模式
+
+`divination.analyze` 内部跑的是一个多阶段流水线。默认是 3 阶段；可
+以通过 `thinking: true` 切到多角度模式。
+
+### 默认 3 阶段（2 次 LLM 调用）
+
+```
+0  buildChartBrief               — 纯函数，确定性
+1  LLM #1  understand            — brief + 问题 → JSON 计划
+                                      (refinedQuestionType,
+                                       focusYongshen, ragQueries,
+                                       intermediateUnderstanding)
+2  RAG     retrieve              — 跑 LLM 提出的查询 + 自动查询，去重
+3  LLM #2  synthesize             — brief + 理解 + RAG → 6/9 段报告
+```
+
+适用：日常快速解读；成本低；一份报告 ~30s。
+
+### thinking 模式（1 + N + 1 次 LLM 调用）
+
+```
+0  buildChartBrief                — 同上
+1  LLM #1  understand + plan      — 同上，但同时返回 angles[]：
+                                     3-5 个独立分析角度 + 每个
+                                     角度专属的 RAG 查询
+2  for each angle, in parallel:
+     (a) searchMany(angle.queries)  — 每个角度跑自己的 RAG
+     (b) LLM "analyze from this    — 300-500 字的单角度分析
+         angle"  using (a)'s hits
+3  LLM #N  synthesize              — brief + 理解 + N 个角度分析
+                                     → 整合后的 6/9 段报告
+```
+
+适用：需要从多个独立视角深度分析的复杂问题；每个角度的 RAG 上下文不
+串味；最终综合时把多角度的发现交叉对照。运行时间约 1.5–2 倍。
+
+### 怎么开
+
+CLI：
+
+```bash
+# /chat 路径
+orbit chat --session sess_demo "..." --thinking
+orbit chat --session sess_demo "..." --thinking --angles 4   # 1..5，默认 3
+orbit chat --session sess_demo "..." --thinking --debug      # 看完整 timeline
+
+# 独立 analyze 路径
+orbit divination analyze chart.json --thinking
+orbit divination analyze chart.json --thinking --angles 5 --debug
+```
+
+HTTP：
+
+```bash
+curl -X POST http://localhost:3000/api/v1/chat \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{
+    "sessionId": "sess_demo",
+    "message": "详细分析",
+    "thinking": true,
+    "angles": 3,
+    "debug": true
+  }'
+
+curl -X POST http://localhost:3000/api/v1/divination/analyze \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{
+    "sessionId": "sess_demo",
+    "thinking": true,
+    "angles": 4,
+    "debug": true
+  }'
+```
+
+LLM 也可在调 `divination.analyze` 工具时直接传 `thinking: true,
+angles: N`（[DivinationTool](src/core/tools/builtins/DivinationTool.ts) 的
+schema 已支持这两个参数）。
+
+### 默认角度
+
+如果 LLM 在 Stage 1 没规划出 angles（或 LLM 不可用 fallback），分析
+Agent 会用 4 个默认角度填充到 `--angles` 数量：
+
+1. **用神与旺衰** — 用神候选的旺衰、是否空破、与日辰月令的生克
+2. **世应与动变** — 世爻与应爻的五行生克，动爻化出的走向
+3. **时间与月令** — 排盘时间（年/月/日/时四柱 + 节气）的影响
+4. **古断参考** — 知识库里的类似卦例判辞
+
+LLM 通常会基于问题类型和卦象，列出 1–2 个更有针对性的角度替代
+默认值，比如 `动爻回头生`、`伏神飞神` 等。
+
+### Debug 输出（`--debug` 或 `debug: true`）
+
+thinking 模式展开后，pipeline timeline 多出来每个角度对应的
+`rag-retrieve` 和 `angle-analyze` 步骤；`debug.perAngle[]` 数组列出每
+个角度的：
+
+- `name` / `perspective`：角度名 + 视角
+- `ragQueries`：该角度专属的 RAG 查询
+- `hits`：top-k 召回 + 来源追溯
+- `analysis`：LLM 给出的单角度分析（含 `[cite: source]`）
+- `model` / `provider` / `usage`：调用的模型 + token 消耗
+
+CLI 渲染样例（`orbit chat --thinking --debug`）：
+
+```
+分析流程时间线 (pipeline)
+──────────────────────────────────────────────────────────
+①  构建 ChartBrief           0ms    lines=6
+②  LLM #1 — 理解              8.2s   deepseek-v4-flash in=2.1k out=0.7k angles=3
+③  RAG 召回  角度 1=用神与旺衰       1.2s   queries=3 deduped=3
+③  RAG 召回  角度 2=世应与动变       0.9s   queries=3 deduped=4
+③  RAG 召回  角度 3=时间与月令       1.1s   queries=3 deduped=5
+④  角度分析  角度 1=用神与旺衰       15.8s  deepseek-v4-flash in=1.1k out=1.0k
+④  角度分析  角度 2=世应与动变       12.9s  deepseek-v4-flash in=1.6k out=1.5k
+④  角度分析  角度 3=时间与月令       12.5s  deepseek-v4-flash in=1.9k out=1.2k
+⑤  LLM #N — 综合分析          18.7s  deepseek-v4-flash in=4.3k out=2.5k (merged 3 angles)
+──────────────────────────────────────────────────────────
+总耗时: 71.3s
+
+[多角度分析 (thinking 模式)]
+  角度数: 3
+
+  角度 1：用神与旺衰
+    perspective: ...
+    RAG queries: 官鬼 旺衰 月令巳火, 官鬼 日辰酉金 泄气, 官鬼 旬空 寅卯 作用
+    RAG hits (3):
+      - docs/base_knowledge/增删卜易.md  ...
+      - docs/base_knowledge/实例应用.md  ...
+      - docs/base_knowledge/精华荟萃（上篇）.md  ...
+    LLM 分析: 官鬼用神显于两处... [cite: docs/base_knowledge/...]
+    tokens: in=1120  out=1027
+
+  角度 2：世应与动变
+    ...
+```
+
+## Skill、Workflow、函数和知识库的边界
+
+后续开发时不要把所有东西都叫 skill。建议按下面边界处理：
+
+| 类型 | 应放内容 | 当前或建议落点 |
+|---|---|---|
+| 纯函数 / 常量表 | 不需要上下文、可确定计算、必须单测覆盖的规则 | `src/liuyao/constants/*`、`src/liuyao/skills/*` 内部函数 |
+| 六爻领域 skill | 一个明确领域动作，输入输出结构化，可被 assembler 编排 | `castSkill`、`calendarSkill`、`hexagramSkill`、`najiaSkill` 等 |
+| Agent skill | 对 chat 输入做预处理或补充上下文，不负责排盘 | `src/core/skills/builtins/*`，例如意图识别、上下文补全 |
+| Tool | Agent 可调用的外部动作，有权限边界和副作用 | `src/core/tools/builtins/DivinationTool.ts`、search、filesystem、MCP |
+| Workflow | 多步骤业务流程，适合串联多个 tool / skill / agent stage | `configs/workflows/*.yaml` |
+| 知识库 | 可被引用的文本、案例、断语、规则解释、出处 | `docs/base_knowledge/*`、Mongo RAG 文档 |
+| Prompt | Agent 行为约束、输出格式、禁止事项 | `prompts/system/*.yaml`、`src/liuyao/agent/*` stage prompt |
+
+### 已适合固化为 skill / 函数的内容
+
+| 内容 | 建议 |
+|---|---|
+| 起卦归一化 | 已有 `castSkill`，继续扩展三币、时间、数字、汉字起卦输入 |
+| 日历四柱 | 已有 `calendarSkill`，需要补更严格的节气边界测试 |
+| 64 卦识别 | 已有 `hexagramSkill`，保持表驱动和 snapshot 测试 |
+| 八宫、世应 | 已有 `palaceSkill`，不交给 LLM |
+| 纳甲 | 已有 `najiaSkill`，继续做全 64 卦覆盖测试 |
+| 六亲 | 已有 `sixRelativeSkill`，保留五行生克推导 |
+| 六神 | 已有 `sixGodSkill`，保留日干起六神 |
+| 旬空 | 已有 `voidSkill`，建议从日柱推导而不是只按日干组近似 |
+| 冲合刑害破 | 需要补完整规则和优先级，做成 `branchRelationSkill` 的确定性输出 |
+| 动化关系 | 需要补回头生克、化进化退、化空化破，扩展 `transformationSkill` |
+| 用神取用 | 需要把问题类型、六亲、世应、伏神、两现/多现规则固化为 `yongshenSkill` |
+| 旺衰评分 | 需要把月建、日辰、动爻、空破、墓绝等转为结构化评分 `strengthSkill` |
+| 伏神飞神 | 需要完整规则表和输出字段，完善 `fushenSkill` |
+
+### 适合做成 workflow 的内容
+
+| Workflow | 目的 |
+|---|---|
+| `first_divination_session` | 新用户首次起卦：收集问题、校验输入、排盘、生成简版报告 |
+| `deep_analysis` | 标准报告 + thinking 多角度分析 + 引用整理 |
+| `case_review` | 咨询师导入旧卦例，生成结构化标签、断语依据、复盘摘要 |
+| `knowledge_ingestion` | 管理员上传资料，自动切片、标注来源、质量检查、入库 |
+| `rule_regression_check` | 修改规则表后跑 64 卦、典型卦例、快照对比 |
+| `frontend_session_flow` | 前端会话状态机：起卦、brief 预览、确认分析、追问 |
+
+### 适合放知识库的内容
+
+| 内容 | 用途 |
+|---|---|
+| 经典原文 | RAG 引用和解释依据，如《增删卜易》《黄金策》《卜筮正宗》 |
+| 现代规则解释 | 帮助 LLM 用通俗语言解释用神、世应、动爻、空破 |
+| 真实案例 | 给“类似卦例”检索和报告类比使用 |
+| 断语模板 | 不直接替代判断，但可作为表达和结构参考 |
+| 业务场景词典 | 把 offer、跳槽、合同、考试、复合、投资映射到六亲和问题类型 |
+| 来源元数据 | 书名、章节、页码、版本、可信度、是否可外显引用 |
+
+不要只把规则放进知识库。如果某条规则会影响排盘字段或判断标签，它应该先函数化，再把解释文字放进知识库。
+
+## 开发计划
+
+### P0：文档和可运行基线
+
+- 统一 README、`README.zh.md`、`docs/README.md` 的定位，避免中英文和新旧能力互相矛盾。
+- 给 `/divination/chart`、`/divination/analyze`、`/chat` 增加最小可复制 curl 示例和响应字段说明。
+- 固化一个 `sess_offer_demo` 端到端验收用例：排盘、brief、RAG、chat debug、报告引用都要可验证。
+- 增加 schema 文档：`ChartResult`、`ChartBrief`、`AnalysisReport`、`RagCitation`。
+
+### P1：确定性规则补完
+
+- 完成 `branchRelationSkill`：六冲、六合、三合、半合、三刑、六害、六破、墓、绝、合化优先级。
+- 完成 `transformationSkill`：回头生、回头克、化进、化退、化空、化破、化墓。
+- 完成 `strengthSkill`：月令、日辰、动爻、生扶克泄耗、空破墓绝的分项评分。
+- 完成 `yongshenSkill`：按问题类型取用神，处理用神两现、多现、伏藏、世应用神。
+- 完成 `fushenSkill`：伏神、飞神、飞伏生克、伏神出伏条件。
+- 为 64 卦全量生成快照测试，任何规则表修改都必须跑 regression。
+
+### P1：知识补全
+
+- 引入并结构化《卜筮正宗》《增删卜易》《黄金策》《易隐》《火珠林》相关章节。
+- 补充问题类型知识：求财、事业、感情、婚姻、考试、合同、官司、疾病、失物、出行、合作、宠物。
+- 补充应期规则：年月日时、动爻逢合冲、空亡填实、墓绝冲开、用神临值。
+- 补充案例库：每类问题至少 20 个标注案例，字段包括问题、时间、卦盘、断语、结果、复盘。
+- 给知识文档增加 metadata：来源、章节、可信度、适用场景、是否经典原文、是否现代解释。
+
+### P2：Skill 化和函数化
+
+- 把“三币起卦”“数字起卦”“时间起卦”“汉字起卦”做成结构化输入 skill，而不是散落在 CLI 或前端。
+- 把“问题类型分类 -> 用神候选 -> RAG query 生成”拆为可测试 pipeline，减少 LLM 随机性。
+- 把“断语风险控制”做成 Agent skill：禁止绝对承诺、医疗/投资/法律场景必须加不确定性说明。
+- 把“报告结构化输出”从纯 markdown 推进到 JSON schema + markdown render 双输出。
+- 把 RAG query rewrite、chunk rerank、citation cleanup 做成独立模块。
+
+### P2：Workflow 产品化
+
+- 建立新用户起卦 workflow：问题收集、起卦方式选择、输入校验、排盘确认、报告生成。
+- 建立专家模式 workflow：brief 可编辑注释、选择分析角度、选择知识库范围、导出报告。
+- 建立知识入库 workflow：上传、去重、切片、metadata 标注、召回测试、发布到 system scope。
+- 建立规则发布 workflow：改规则表、跑测试、生成 diff、验证典型卦例、记录版本号。
+
+### P3：产品和工程能力
+
+- 前端工作台：起卦输入、卦盘可视化、brief 检查、报告阅读、引用展开、追问。
+- Admin 控制台：用户、API key、provider、模型成本、知识库、RAG 质量、系统状态。
+- 可观测性：pipeline timeline、LLM token/cost、RAG hit rate、引用覆盖率、失败告警。
+- 部署：Docker Compose、生产环境配置模板、Mongo/Redis 备份、日志轮转、健康探针。
+- 权限：系统知识库管理员、咨询师、普通用户、API client 分级。
+- 数据闭环：用户反馈、报告质量评分、案例结果回填、错误排盘回放。
+
+## 关键原则
+
+- 排盘相关内容优先函数化，LLM 只解释。
+- 会影响判断标签的规则不能只放知识库。
+- 知识库必须有来源和适用范围，否则引用价值很低。
+- Workflow 编排业务过程，Skill 做单一结构化能力。
+- 所有多用户数据默认按 userId 隔离。
+- 每个新增规则都要有单元测试、典型卦例和回归用例。
 
 ## License
 
