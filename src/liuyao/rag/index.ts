@@ -531,3 +531,62 @@ export async function search(
   scored.sort((a, b) => b.score - a.score);
   return scored.slice(0, k);
 }
+
+/**
+ * Multi-query RAG retrieval. Runs `search` once per query, then
+ * dedupes hits by chunk id, keeping the highest score. Returns
+ * per-query provenance (`hits[].query`) so the caller can show
+ * "this citation came from the LLM-proposed query X".
+ *
+ * Used by the analysis agent's Step 1→2 handoff: the LLM proposes 2-3
+ * queries during the understand step, and we union them with a few
+ * auto-queries (hexagram name, 用神 relatives).
+ */
+export async function searchMany(
+  queries: string[],
+  k: number = 4,
+  requesterId: string,
+  isAdmin: boolean = false,
+): Promise<Array<{
+  query: string;
+  hits: Array<{ chunk: RagChunk; score: number }>;
+}>> {
+  // Run queries in parallel — they're independent.
+  const results = await Promise.all(
+    queries.map(async (q) => ({
+      query: q,
+      hits: await search(q, k, requesterId, isAdmin).catch((e) => {
+        logger.warn(`rag.searchMany: query "${q}" failed (${e?.message ?? e}); returning []`);
+        return [];
+      }),
+    })),
+  );
+  return results;
+}
+
+/**
+ * Flatten the output of `searchMany` into a deduped list, keeping the
+ * highest score per chunk id. The returned list is sorted by score
+ * desc, capped at `totalK`. Each entry carries `provenanceQueries[]`
+ * so the caller can show "this chunk matched both `妻财持世` and
+ * `求财` queries".
+ */
+export function dedupeManyHits(
+  results: Array<{ query: string; hits: Array<{ chunk: RagChunk; score: number }> }>,
+  totalK: number = 8,
+): Array<{ chunk: RagChunk; score: number; provenanceQueries: string[] }> {
+  const byId = new Map<string, { chunk: RagChunk; score: number; provenanceQueries: string[] }>();
+  for (const { query, hits } of results) {
+    for (const { chunk, score } of hits) {
+      const existing = byId.get(chunk.id);
+      if (!existing || existing.score < score) {
+        byId.set(chunk.id, { chunk, score, provenanceQueries: [query] });
+      } else if (existing.score === score) {
+        existing.provenanceQueries.push(query);
+      }
+    }
+  }
+  const flat = Array.from(byId.values());
+  flat.sort((a, b) => b.score - a.score);
+  return flat.slice(0, totalK);
+}

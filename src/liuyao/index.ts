@@ -21,7 +21,8 @@ export { yongshenSkill } from './skills/yongshenSkill';
 export { transformationSkill } from './skills/transformationSkill';
 export { fushenSkill } from './skills/fushenSkill';
 export { assembleChart, type AssembleInput } from './skills/chartAssembler';
-export { runAnalysisAgent, AGENT_SYSTEM_PROMPT } from './agent/analysisAgent';
+export { runAnalysisAgent } from './agent/analysisAgent';
+export { buildChartBrief } from './agent/chartBrief';
 export { buildReport } from './agent/reportTemplate';
 export { detectQuestionType, missingContextFor } from './agent/questionClassifier';
 export {
