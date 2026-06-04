@@ -374,6 +374,143 @@ update both when adding a new alias.
 
 ---
 
+## 测试场景 — 小李的面试烦恼
+
+A reproducible end-to-end scenario that exercises the full multi-stage
+analysis pipeline. Use it to sanity-check that everything still works
+after a refactor, or as a guided walkthrough of the system.
+
+> **场景**：小李（dev 用户）工作两年，最近收到某互联网大厂高级
+> 工程师岗位的面试邀请，约在下周二。他昨晚翻来覆去睡不着，想用
+> 六爻问一卦：这次面试能不能拿到 offer？
+>
+> **时间**：当前时间（Shanghai 时区）。可改 `--datetime` 自定义。
+>
+> **预期分析角度**：用神为官鬼（代表职位 / offer），关注世爻旺衰
+> 与旬空、应爻生克、动爻化出、三合 / 六合 / 冲。
+
+### 1. 起卦
+
+```bash
+# 6 枚铜钱，1 个动爻（第 4 爻 9 = 老阳 → 动）。
+# 不传 --day-stem / --day-branch — 由程序从 --datetime 推导。
+orbit divination chart --yao 7 8 7 9 7 8 \
+  --datetime "$(TZ='Asia/Shanghai' date '+%Y-%m-%dT%H:%M:%S+08:00')" \
+  --timezone 'Asia/Shanghai' \
+  --question "面试大厂高级工程师岗位能否拿到 offer" \
+  --session sess_interview_scenario
+```
+
+Engine output (排盘引擎结果)：
+
+```
+time:   丙午年 / 癸巳月 / 己酉日 / 癸酉时
+旬空:  寅、卯    节气: 小满
+palace:  坎宫 · 四世 · 水
+shi/ying:  4/1
+moving:  4
+
+本卦 革     变卦 既济
+（四世卦 — 用神位置在四爻，世在四爻）
+世爻 = 第 4 爻 (亥 兄弟，旬空，动)
+应爻 = 第 1 爻 (卯 子孙)
+```
+
+If you want to test with a different time, override `--datetime`:
+
+```bash
+# 换成凌晨 3 点 — 看看排盘引擎怎么处理深夜
+orbit divination chart --yao 7 8 7 9 7 8 \
+  --datetime "2026-06-05T03:15:00+08:00" \
+  --timezone 'Asia/Shanghai' \
+  --question "面试能否拿到 offer" \
+  --session sess_interview_3am
+```
+
+### 2. 看结构化 Brief（不消耗 LLM 额度）
+
+```bash
+# 排好盘的 deterministic 文档：六亲/六神/世应/用神/排盘警告。
+# 引擎输出后送给 LLM #1 的就是这份 Brief。
+orbit divination brief --session sess_interview_scenario
+
+# 想看原始 JSON：
+orbit divination brief --session sess_interview_scenario --json
+```
+
+### 3. 跑完整 3 阶段流水线
+
+```bash
+# 不带 --debug: 只看到 LLM 的最终回答
+orbit chat --session sess_interview_scenario "我面试能拿到 offer 吗?"
+
+# 带 --debug: 看到 build brief → LLM #1 understand →
+# RAG retrieve → LLM #2 synthesize 整条时间线
+orbit chat --session sess_interview_scenario "我面试能拿到 offer 吗?" --debug
+```
+
+期望的 `--debug` 时间线（数字会因 LLM provider 而异）：
+
+```
+分析流程时间线 (pipeline)
+──────────────────────────────────────────────────────────
+①  构建 ChartBrief  0ms  lines=6
+②  LLM #1 — 理解  ~6s  deepseek-v4-flash in=800 out=600
+  [理解阶段输出]
+    细化的提问类型: 求事业
+    焦点用神: 官鬼
+    LLM 提出的 RAG 查询 (3-4 个):
+      · 官鬼持世 求事业
+      · 世爻旬空 应期
+      · 动爻化出 事业
+③  RAG 召回  ~1s  queries=6 hits=24 deduped=6
+  [RAG 召回]
+    去重后的命中 (含来源追溯):
+      - docs/base_knowledge/增删卜易.md  ... ← [官鬼 世爻]
+      - docs/base_knowledge/精华荟萃（下篇）.md  ... ← [官鬼持世]
+      ...
+④  LLM #2 — 综合分析  ~20s  deepseek-v4-flash in=3000 out=1800
+──────────────────────────────────────────────────────────
+总耗时: ~30s
+```
+
+### 4. 独立 analyze 命令（不走 /chat，直接看报告）
+
+```bash
+# 把 chart 保存到文件
+orbit divination chart --yao 7 8 7 9 7 8 \
+  --datetime "2026-06-04T18:45:00+08:00" \
+  --timezone 'Asia/Shanghai' \
+  --question "面试能否拿到 offer" \
+  --session sess_interview_file 2>&1 | tail -20
+
+# 跑 stand-alone analyze（无需 LLM 编排器）
+# 注意：stand-alone analyze 会跑完整流水线（brief → understand → RAG → synthesize）
+# 跟 /chat 内调用的 divination.analyze 是同一条代码路径
+```
+
+### 检查清单
+
+跑完场景后，对照检查以下几条确认系统健康：
+
+| 检查项 | 命令 / 预期 |
+|---|---|
+| 模型是 deepseek-v4-flash | `orbit chat ...` 末尾 `[deepseek-v4-flash/deepseek • ...]`，**不**是 `[glm-.../zhipu • ...]` |
+| 排盘 time block 包含 4 柱 | chart 输出有 `丙午年 / 癸巳月 / 己酉日 / 癸酉时` |
+| Brief 包含 6 爻六亲六神 | `orbit divination brief` 输出 6 行 `- 第 N 爻 ...` |
+| LLM #1 细化提问类型 | `--debug` 时间线有 `细化的提问类型: 求事业` 或 `求考试` |
+| LLM #1 焦点用神合理 | `--debug` 时间线有 `焦点用神: 官鬼` |
+| RAG 召回有命中 | `--debug` 时间线有 `deduped=N` 且 N > 0 |
+| 召回条目有 source | 时间线 `去重后的命中` 行有 `docs/base_knowledge/*.md` 路径 |
+| 报告含 `[cite: ...]` 标签 | LLM #2 的最终回答里至少 1 处 `[cite:` |
+| Cache 命中 | LLM #2 调用 `cacheHit` 应 > 0（system prompt 是稳定的，prompt cache 应命中） |
+
+如果哪一项不符合预期，参考 `docs/base_knowledge/` 下的知识库是否
+bootstrap 完整，以及 `.env` 里 `ORBIT_EMBEDDER` 是否是 `remote-zhipu`
+（hash embedder 召回质量差，可能导致 RAG deduped=0）。
+
+---
+
 ## Status
 
 **First-step 排盘**: complete. The deterministic engine produces a
