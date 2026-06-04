@@ -1,730 +1,401 @@
 # OrbitAgent
 
-Modular conversation AI agent backend service with multi-user LLM support.
+**六爻纳甲 (Six-Yang I-Ching) 起卦 + LLM 解读** 的多用户 AI 后端。
 
-## Features
+程序层做确定性排盘 (本卦/变卦、纳甲、六亲、六神、世应、旬空),LLM 层
+负责把排盘结果组织成可读的分析报告并和用户对话。所有规则表 (64 卦、
+八宫纳甲、六亲六神、旬空、日干支) 全部硬编码,LLM 不会"算",只会
+"说清楚"。
 
-- **Multi-LLM Support**: 10+ providers, 25+ models (Claude, GPT, Gemini, DeepSeek, Ollama, Kimi, SiliconFlow, Groq, etc.)
-- **Memory Management**: Temporary memory (Redis, 50-pair limit) + Permanent memory (MongoDB)
-- **Skill System**: Pluggable skill architecture with trigger-based execution
-- **Tool/MCP Integration**: Local and remote MCP server support
-- **Workflow Engine**: YAML-based workflow definition and execution
-- **Prompt Management**: Template-based prompt system with variable substitution
-- **JWT + API Key Authentication**: Dual authentication system with email or phone login
-- **Token Usage Tracking**: Automatic token counting and cost calculation per model (USD)
-- **User Management**: Profiles, check-in streaks, ritual task history, shared feed
-- **RESTful API**: Clean API interface for Swift/Web frontends
-- **API Documentation**: Interactive API docs page with search and examples
+```
+                ┌─────────────────────────────────────┐
+                │  Deterministic 排盘 engine          │
+                │  ────────────────────────────────  │
+   6 bits ──►   │  cast → hexagram → palace → 纳甲   │  ──►  ChartResult
+   or 6 yao     │  → sixRel → sixGod → void …        │      (stored in Mongo)
+                │                                     │
+                └─────────────────────────────────────┘
+                                │
+                                ▼
+                ┌─────────────────────────────────────┐
+                │  LLM analyst (per-user, scoped)     │
+                │  ────────────────────────────────  │
+                │  • reads ChartResult fields only   │
+                │  • cites RAG chunks (Mongo + search)│
+                │  • never recomputes any 排盘 field  │
+                │  • produces 6/9-section report      │
+                └─────────────────────────────────────┘
+```
+
+Core rule (from `design.md`): **程序负责"算准",Agent 负责"说清楚"**。
+The LLM is forbidden from recomputing any chart field; if a field is
+missing it must say so.
 
 ---
 
-## Quick Start
+## 六爻 — what's actually in the box
+
+The 排盘 engine ([src/liuyao/](src/liuyao/)) ships with the full
+first-step deterministic pipeline:
+
+- **64 卦表** — `docs/base_knowledge/64卦数据.json` (卦辞, 爻辞, 世应,
+  符号, 八宫归属) is loaded at module init and re-keyed into
+  `HEXAGRAMS_BY_BITS` / `HEXAGRAMS_BY_NAME` / `HEXAGRAMS_BY_ID`. Every
+  hexagram's palace, palaceType (本宫/一世/.../归魂), and element are
+  derived from the (upper, lower) trigram pair.
+- **13 skills** orchestrated by `chartAssembler.ts` in fixed order:
+  `cast → hexagram → palace → najia → sixRelative → sixGod → void →
+   branchRelation → transformation → yongshen → strength → fushen`
+  (some are P2 stubs and gracefully report `warnings[]` instead of
+  throwing).
+- **纳甲** — all 8 trigrams × inner/outer × 3 lines (96 cells) from
+  the standard 装纳甲歌诀.
+- **六亲** — derived from `palaceElement` vs `lineElement` via
+  the 五行生克 tables.
+- **六神** — derived from `dayStem` (甲乙起青龙, 丙丁起朱雀, ...).
+- **旬空** — derived from `dayStem` (5 day-stem groups).
+- **RAG knowledge base** — `docs/base_knowledge/*.md` ships with
+  the liuyao corpus (装卦方法, 六爻卦理, 易经详解, 实例应用,
+  装卦补充 + 64 卦数据.json). The RAG store is Mongo-backed
+  (`knowledge_documents` + `knowledge_chunks` collections) with
+  per-user scoping: each user sees the system corpus + their own
+  uploads, never another user's private uploads.
+
+### Two-step flow (user + agent)
+
+Every conversation is a divination conversation by default. The flow
+is intentionally split so the LLM never recomputes the chart:
+
+```
+$ orbit divination chart 1 1 1 1 1 1 \
+    --day-stem 甲 --day-branch 子 --session sess_demo
+✓ Chart assembled and stored.
+  orig: 乾   changed: 乾   palace: 乾宫 · 本宫 · 金
+  shi/ying: 6/3   moving: none
+
+$ orbit chat --session sess_demo "这次求财能成吗?"
+完整 6 段报告 + RAG 引用
+```
+
+The chart is persisted in `ChartStore` (Mongo, 24h TTL,
+per-user scoped) under the session id. The agent reads it back via
+the `divination` tool (single action: `analyze`), which calls
+`runAnalysisAgent` → `buildReport` → RAG-augmented 6/9-section
+report. The agent never sees raw bits.
+
+### How a chart is computed
+
+```bash
+# static yin/yang (no moving lines)
+orbit divination chart 1 1 1 1 1 1 --day-stem 甲 --day-branch 子
+
+# 6/7/8/9 yao values (supports moving lines 6/9)
+orbit divination chart --yao 7 7 7 7 9 7 --day-stem 甲 --day-branch 子
+```
+
+The CLI echoes back a one-line proof of the deterministic output
+(本卦, 变卦, 卦宫 + 世/应, 6 lines × 纳甲/六亲/六神) so you can see
+the engine produced what you expected before sending it to the LLM.
+
+The bits/yao encoding is documented in the CLI's `--help` and in
+`docs/base_knowledge/装卦方法.md`.
+
+---
+
+## 框架能力 — what's behind the engine
+
+Beneath the liuyao subsystem, OrbitAgent is a single Express service
+with the standard pieces you'd expect for a production LLM backend.
+You don't need any of this to use the 六爻 product; it's there when
+you want to extend.
+
+### Multi-LLM support
+
+10+ providers, 25+ models wired through one adapter interface
+([src/core/llm/](src/core/llm/)). Native adapters (`anthropic`,
+`openai`, `google`, `ollama`, `deepseek`) register when an API key is
+present; OpenAI-compatible adapters (`kimi`, `siliconflow`, `groq`,
+`together`, `perplexity`) share a single base class and register
+automatically when their `<PROVIDER>_API_KEY` env var is set. Model
+IDs are globally unique so the routing table is a single linear scan.
+
+Default 六爻 agent uses `deepseek-v4-flash` — the system prompt +
+skill/tool list is ~1280 tokens and 100% hits the prompt cache, so
+cache-friendly pricing makes the per-cast analysis essentially free.
+
+### Multi-user isolation
+
+Every store that holds user-owned business data scopes by `userId`
+and rejects cross-user access:
+- `ChartStore` ([src/core/memory/ChartStore.ts](src/core/memory/ChartStore.ts)) —
+  one chart per `(userId, sessionId, chartKey)`, Mongo-backed with
+  a TTL index, throws on cross-user read attempts.
+- `PermanentMemory` — `Conversation` + `Message` collections scoped
+  by userId; permanent storage is opt-in via
+  `POST /api/v1/memory/permanent`.
+- RAG — `knowledge_documents` + `knowledge_chunks` collections with
+  `scope=system` (admin-managed) or `scope=user` (per-user uploads);
+  searches union system chunks with the caller's own user-scope
+  chunks only. See `tests/integration/multi-user-isolation.test.ts`
+  (13 cases covering the cross-user access matrix).
+
+### Agents, skills, tools, workflows
+
+- **Agents** ([configs/agents.yaml](configs/agents.yaml)) — declarative
+  YAML registry; ships with `default` (= liuyao), `generic`, and
+  `coding` agents. Add a new agent: append to `agents.yaml`, drop a
+  prompt at `prompts/system/<id>.yaml`, restart.
+- **Skills** — preprocessing hooks in the chat pipeline; built-ins
+  live in `src/core/skills/builtins/`. CLI exposes
+  `orbit skill install <url|text>` and `orbit skill uninstall <id>`
+  (admin only).
+- **Tools** — `divination` (liuyao), `filesystem`, `search`, plus
+  MCP servers declared in `config.yaml`. Per-agent tool filtering
+  means the 六爻 agent only sees `divination`; the `coding` agent
+  sees `filesystem` and `search`.
+- **Workflows** — YAML definitions in `configs/workflows/`, hot
+  reloaded every 60s.
+
+### Auth
+
+Dual scheme: `X-API-Key` (hashed, permission-scoped) and JWT
+(`Authorization: Bearer …`). Both middlewares are non-blocking by
+default and chain together; admin routes add `adminOnly`. The `orbit
+login --dev` path mints a 30-day JWT for the seeded dev user so you
+can exercise the API without a full auth flow.
+
+In dev (`NODE_ENV !== 'production'`) two users are auto-seeded:
+- Admin: `admin@orbit.local` / `orbit_admin_2026`
+- Test: `dev@test.local` / `devpassword123`
+
+---
+
+## Quick start
 
 ### Prerequisites
 
 - Node.js 18+
-- MongoDB
-- Redis
+- MongoDB (default `mongodb://localhost:27017/orbit_agent`)
+- Redis (default `redis://localhost:6379`)
 
-### 1. Install Dependencies
+```bash
+# macOS
+brew services start mongodb-community
+brew services start redis
+```
+
+### Install + run
 
 ```bash
 npm install
+cp .env.example .env          # fill in at least one LLM API key
+npm run dev                   # ts-node + dotenv hot-load
 ```
 
-### 2. Configure Environment
+Server runs at `http://localhost:3000`. Health: `GET /api/v1/health`.
 
-Copy the example environment file:
+### First 六爻 session in 3 commands
 
 ```bash
-cp .env.example .env
-```
+# 1. Get a dev JWT
+TOKEN=$(curl -s -X POST http://localhost:3000/api/v1/dev/token | jq -r .data.accessToken)
 
-Edit `.env` with your API keys:
+# 2. Cast a chart
+curl -X POST http://localhost:3000/api/v1/divination/chart \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"bits":[1,1,1,1,1,1], "sessionId":"sess_demo",
+       "dayStem":"甲", "dayBranch":"子",
+       "question":"求财"}'
 
-```bash
-# LLM API Keys (fill in at least one)
-ANTHROPIC_API_KEY=sk-ant-xxxxx
-OPENAI_API_KEY=sk-xxxxx
-SILICONFLOW_API_KEY=sk-xxxxx
-
-# Auth (change in production!)
-JWT_SECRET=your-secret-key
-JWT_REFRESH_SECRET=your-refresh-secret
-```
-
-### 3. Start Infrastructure
-
-```bash
-# Start Redis
-brew services start redis
-
-# Start MongoDB
-brew services start mongodb-community
-```
-
-### 4. Start the Server
-
-```bash
-# Development mode
-npm run dev
-
-# Or build and run
-npm run build
-npm start
-```
-
-Server runs at: `http://localhost:3000`
-
----
-
-## Usage Examples
-
-### 1. Register User
-
-```bash
-curl -X POST http://localhost:3000/api/v1/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "user@example.com",
-    "username": "myuser",
-    "password": "password123"
-  }'
-```
-
-Response:
-```json
-{
-  "success": true,
-  "data": {
-    "user": { "email": "user@example.com", ... },
-    "accessToken": "eyJhbG...",
-    "refreshToken": "eyJhbG..."
-  }
-}
-```
-
-### 2. Send Chat Message
-
-```bash
+# 3. Ask the agent to interpret
 curl -X POST http://localhost:3000/api/v1/chat \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <your-token>" \
-  -d '{
-    "message": "你好，请介绍一下自己",
-    "model": "Qwen/Qwen3-32B"
-  }'
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"sessionId":"sess_demo", "message":"这次求财能成吗?"}'
 ```
 
-Response:
-```json
-{
-  "success": true,
-  "data": {
-    "sessionId": "sess_abc123...",
-    "content": "你好！我是 Qwen3...",
-    "model": "Qwen/Qwen3-32B",
-    "provider": "siliconflow"
-  }
-}
-```
-
-### 3. Get Chat History
+### CLI
 
 ```bash
-curl http://localhost:3000/api/v1/chat/<sessionId> \
-  -H "Authorization: Bearer <your-token>"
+# install the binary
+npm run build && npm link
+
+# login (dev)
+orbit login --dev
+
+# cast + chat
+orbit divination chart 1 1 1 1 1 1 --day-stem 甲 --day-branch 子 \
+  --question "求财" --session sess_demo
+orbit chat --session sess_demo "帮我分析"
 ```
 
-### 4. List Available Models
+The `orbit` binary is a thin client over the same REST API; it
+doesn't re-implement any business logic. State lives in `~/.orbit/`
+(overridable via `ORBIT_HOME`).
+
+### RAG: ingest your own liuyao knowledge
 
 ```bash
-curl http://localhost:3000/api/v1/models \
-  -H "Authorization: Bearer <your-token>"
+# upload a markdown file (becomes user-scope, private to you)
+orbit divination rag upload my-notes.md
+orbit divination rag list
+
+# admin can add to the system knowledge base
+orbit divination rag upload my-system-doc.md --system
 ```
-
-### 5. Register with Phone
-
-```bash
-curl -X POST http://localhost:3000/api/v1/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{
-    "phone": "13800138000",
-    "username": "myuser",
-    "password": "password123"
-  }'
-```
-
-### 6. Check Token Usage
-
-### 7. Check-in & Get User Profile
-
-```bash
-# Get profile (streak, badges)
-curl http://localhost:3000/api/v1/users/profile \
-  -H "Authorization: Bearer <token>"
-
-# Daily check-in
-curl -X POST http://localhost:3000/api/v1/users/profile/check-in \
-  -H "Authorization: Bearer <token>"
-
-# User stats (rituals count, likes, streak)
-curl http://localhost:3000/api/v1/users/profile/stats \
-  -H "Authorization: Bearer <token>"
-```
-
-### 8. Ritual Tasks
-
-```bash
-# List user's ritual tasks
-curl "http://localhost:3000/api/v1/users/tasks?page=1&limit=10" \
-  -H "Authorization: Bearer <token>"
-
-# Get public feed (no auth)
-curl "http://localhost:3000/api/v1/users/tasks/feed?page=1&limit=20"
-
-# Create a ritual task
-curl -X POST http://localhost:3000/api/v1/users/tasks \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <token>" \
-  -d '{
-    "triggerSymbol": "山",
-    "mode": "decision",
-    "question": "我该做出什么决定？"
-  }'
-
-# Like a task
-curl -X POST http://localhost:3000/api/v1/users/tasks/<taskId>/like \
-  -H "Authorization: Bearer <token>"
-```
-
-### 9. View API Documentation
-
-```bash
-curl http://localhost:3000/api/v1/usage/stats \
-  -H "Authorization: Bearer <your-token>"
-```
-
-Response:
-```json
-{
-  "success": true,
-  "data": {
-    "summary": {
-      "totalPromptTokens": 50000,
-      "totalCompletionTokens": 120000,
-      "totalTokens": 170000,
-      "totalCost": 2.45,
-      "requestCount": 250
-    },
-    "byModel": [...],
-    "daily": [...]
-  }
-}
-```
-
-### 6. View API Documentation
-
-Open in browser:
-- API Docs: http://localhost:3000/api/v1/docs
-- Status Page: http://localhost:3000/api/v1/status/page
-- Usage Dashboard: http://localhost:3000/api/v1/usage/page
-
----
-
-## API Endpoints
-
-### Authentication
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/v1/auth/register` | Register new user (email or phone) |
-| POST | `/api/v1/auth/login` | Login with email or phone |
-| POST | `/api/v1/auth/refresh` | Refresh token |
-| GET | `/api/v1/auth/me` | Get current user |
-| PUT | `/api/v1/auth/me` | Update current user profile |
-| POST | `/api/v1/auth/api-key` | Generate API key |
-| GET | `/api/v1/auth/api-keys` | List API keys |
-| DELETE | `/api/v1/auth/api-key/:keyId` | Revoke API key |
-| POST | `/api/v1/auth/logout` | Logout |
-
-### Users (JWT required)
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/v1/users/profile` | Get user profile (streak, badges) |
-| PUT | `/api/v1/users/profile` | Update profile fields |
-| POST | `/api/v1/users/profile/check-in` | Daily check-in |
-| GET | `/api/v1/users/profile/stats` | User stats (rituals, likes, streak) |
-| GET | `/api/v1/users/profile/token-stats` | Token usage breakdown by model & daily |
-| GET | `/api/v1/users/profile/token-usage/recent` | Recent token usage records |
-| POST | `/api/v1/users/tasks` | Create a ritual conversation task |
-| GET | `/api/v1/users/tasks` | List user's ritual tasks (paginated) |
-| GET | `/api/v1/users/tasks/feed` | Public shared ritual feed |
-| GET | `/api/v1/users/tasks/:taskId` | Get a single task |
-| PUT | `/api/v1/users/tasks/:taskId` | Update task (response, archive, share) |
-| POST | `/api/v1/users/tasks/:taskId/like` | Like a task |
-| POST | `/api/v1/users/tasks/:taskId/archive` | Archive a task |
-| DELETE | `/api/v1/users/tasks/:taskId` | Delete a task |
-
-### Chat
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/v1/chat` | Send message |
-| POST | `/api/v1/chat/stream` | Stream response |
-| GET | `/api/v1/chat/:sessionId` | Get history |
-| POST | `/api/v1/chat/:sessionId/clear` | Clear session |
-
-### Memory
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/v1/memory/permanent` | List conversations |
-| POST | `/api/v1/memory/permanent` | Create conversation |
-| GET | `/api/v1/memory/permanent/:id` | Get conversation |
-| DELETE | `/api/v1/memory/permanent/:id` | Delete conversation |
-
-### Models
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/v1/models` | List all models |
-| GET | `/api/v1/models/:id` | Get model info |
-| POST | `/api/v1/models/switch` | Switch default model |
-
-### Token Usage
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/v1/usage/stats` | Get usage stats (total, by model, daily) |
-| GET | `/api/v1/usage/recent` | Get recent usage records |
-| GET | `/api/v1/usage/conversation/:id` | Get usage for a conversation |
-| GET | `/api/v1/usage/pricing` | Get model pricing reference |
-| GET | `/api/v1/usage/page` | Token usage HTML dashboard |
-
-### Documentation & Status
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/v1/docs` | Interactive API documentation page |
-| GET | `/api/v1/status/page` | Status dashboard (HTML) |
-| GET | `/api/v1/health` | Health check |
 
 ---
 
 ## Configuration
 
-### config.yaml
+[config.yaml](config.yaml) is the source of truth for shape; use
+[.env](.env) only for secrets and host/port overrides. `config.yaml`
+substitutes `${VAR}` and `${VAR:default}` placeholders against
+`process.env` and validates the merged tree with zod.
 
-Main configuration file. Key sections:
+Provider model lists declared in `config.yaml` drive the
+`/api/v1/models` API output.
 
-```yaml
-# App settings
-app:
-  port: 3000
-  apiPrefix: "/api/v1"
-
-# LLM Providers
-llm:
-  defaultProvider: "siliconflow"
-  defaultModel: "Qwen/Qwen3-32B"
-
-# Compatible models (OpenAI API format)
-compatible:
-  siliconflow:
-    enabled: true
-    baseUrl: "https://api.siliconflow.cn/v1"
-    models:
-      - id: "Qwen/Qwen3-32B"
-        name: "Qwen3-32B"
-        enabled: true
-        default: true
-```
-
-### Available Providers
-
-| Provider | Environment Variable | Models |
-|----------|---------------------|--------|
-| Anthropic Claude | `ANTHROPIC_API_KEY` | claude-3-5-sonnet, claude-3-opus, etc. |
-| OpenAI | `OPENAI_API_KEY` | gpt-4o, gpt-4-turbo, gpt-3.5-turbo |
-| Google Gemini | `GOOGLE_API_KEY` | gemini-2.0-flash, gemini-1.5-pro |
-| DeepSeek | `DEEPSEEK_API_KEY` | deepseek-chat, deepseek-coder |
-| Ollama | (local) | llama2, llama3, mistral, codellama |
-| Kimi (Moonshot) | `KIMI_API_KEY` | moonshot-v1-8k, moonshot-v1-128k |
-| SiliconFlow | `SILICONFLOW_API_KEY` | Qwen3-32B, Qwen2.5-7B, GLM-4 |
-| Groq | `GROQ_API_KEY` | llama-3.1-70b, mixtral-8x7b |
-| Together AI | `TOGETHER_API_KEY` | Llama-3-70B, DeepSeek-V2 |
-| Perplexity | `PERPLEXITY_API_KEY` | sonar-large-online |
-
-### Token Pricing
-
-Token usage is automatically tracked on every chat request. Costs are calculated in USD:
-
-| Provider | Model | Input ($/M tokens) | Output ($/M tokens) |
-|----------|-------|---------------------|---------------------|
-| Anthropic | Claude 3.5 Sonnet | $3.00 | $15.00 |
-| Anthropic | Claude 3.5 Haiku | $0.80 | $4.00 |
-| OpenAI | GPT-4o | $2.50 | $10.00 |
-| OpenAI | GPT-4 Turbo | $10.00 | $30.00 |
-| OpenAI | GPT-3.5 Turbo | $0.50 | $1.50 |
-| Google | Gemini 2.0 Flash | $0.00 | $0.10 |
-| Google | Gemini 1.5 Pro | $1.25 | $5.00 |
-| DeepSeek | deepseek-chat | $0.27 | $1.10 |
-| Ollama | (local models) | $0.00 | $0.00 |
-
-View all pricing: `GET /api/v1/usage/pricing`
+Per-model token pricing (USD per million tokens, including
+`cacheHitPricePerM` for prompt-cache hits) lives in
+[src/models/TokenUsage.ts](src/models/TokenUsage.ts) — add new
+model pricing there, not in `config.yaml`.
 
 ---
 
-## Project Structure
+## API surface (the bits you actually call)
 
-```
-orbit-agent/
-├── src/
-│   ├── core/
-│   │   ├── llm/           # LLM adapters
-│   │   ├── memory/         # Memory systems
-│   │   ├── skills/         # Skill system
-│   │   ├── tools/          # Tool/MCP
-│   │   └── workflow/       # Workflow engine
-│   ├── prompts/             # Prompt templates
-│   ├── routes/              # API routes
-│   │   ├── api-docs.routes.ts    # API documentation
-│   │   ├── chat.routes.ts        # Chat endpoints
-│   │   ├── memory.routes.ts      # Memory endpoints
-│   │   ├── usage.routes.ts       # Token usage endpoints
-│   │   └── ...
-│   ├── models/              # MongoDB models
-│   │   ├── TokenUsage.ts    # Token usage tracking
-│   │   └── ...
-│   ├── services/            # Business services
-│   │   └── TokenService.ts  # Token tracking service
-│   ├── config/              # Configuration
-│   ├── middleware/          # Express middleware
-│   └── app.ts               # Entry point
-├── configs/                 # YAML configs
-├── prompts/                 # Prompt templates
-├── tests/                   # Tests
-├── config.yaml              # Main config
-├── .env                     # Environment variables
-└── package.json
-```
+All routes mounted under `app.apiPrefix` (default `/api/v1`).
+Authenticated routes accept either `Authorization: Bearer <jwt>` or
+`X-API-Key: …`. Response envelope: `{ success, data?, error?: { code, message, details? } }`.
 
----
-
-## Skills
-
-Skills are pre/post-processing hooks that run in priority order on every
-chat turn. They can inject variables into the LLM context, rewrite the
-user message, or halt the pipeline.
-
-### File format: `.md` (Anthropic-style)
-
-Each skill is a single Markdown file with YAML frontmatter:
-
-```markdown
----
-id: timezone-greeter
-name: Timezone Greeter
-description: Stamps the current ISO time on context.variables
-version: 1.0.0
-priority: 3                    # higher runs first
-enabled: true
-triggers:
-  - type: always             # or keyword / regex / intent
-    pattern: ""               # keyword / regex body, or intent name
----
-
-# Timezone Greeter
-
-The body is human-readable documentation. It is exposed on
-`GET /api/v1/skills/:id` (under `body`) and is intended to be passed
-to the LLM as a system message if you want the model to "know" the
-skill's purpose.
-```
-
-Required frontmatter fields: `id`, `name`, `description`, `version`,
-`priority`, `triggers` (at least one). `enabled` defaults to `true`.
-
-### Where skills live
-
-| Location | Purpose | Writable |
+| Method | Path | Notes |
 |---|---|---|
-| `src/core/skills/builtins/*.md` | Bundled with the source tree (read-only at runtime) | no |
-| `~/.orbit/skills/*.md` | User-installed via CLI / HTTP API | yes |
+| `POST` | `/divination/chart` | 6 bits or 6 yao values + dayStem/dayBranch → fully-decorated chart, persisted in ChartStore under the session. |
+| `POST` | `/divination/analyze` | Reads a stored chart by sessionId (or accepts an inline chart) → AnalysisReport. |
+| `GET` | `/divination/chart/keys/:sessionId` | List chart keys stored for the caller's session. |
+| `POST` | `/divination/rag/upload` | Ingest a markdown doc (user-scope; admin can pass `scope=system`). |
+| `GET` | `/divination/rag/list` | List docs the caller can see. |
+| `POST` | `/divination/rag/search` | Top-k chunks (scoped). |
+| `DELETE` | `/divination/rag/:source` | Delete a doc (bare filename accepted, server-resolves). |
+| `POST` | `/chat` | Main chat. `agentId` defaults to `default` (= liuyao). |
+| `POST` | `/chat/stream` | SSE streaming. |
+| `POST` | `/auth/login` / `/auth/register` | JWT auth. |
+| `GET` / `POST` | `/users/*` | Profile, check-in streaks, ritual task history, public feed. |
+| `GET` | `/models` | List available models. |
+| `GET` | `/models/health` | LLM provider health table. |
+| `GET` | `/usage/stats` | Token usage summary + byModel + daily. |
+| `GET` | `/health` | `{ status: "healthy", uptime }`. |
+| `POST` | `/dev/token` | (dev only) Get a JWT without login. |
 
-Scanned in that order on every `SkillManager.initialize()` (which the
-chat route calls via `POST /skills/reload` after an install/uninstall).
-A user-skill with the same id as a built-in overrides the built-in.
+Error code namespaces: `1000=auth`, `2000=validation`, `3000=resource`,
+`4000=LLM`, `5000=memory`, `6000=skills`, `7000=tools`, `8000=workflow`,
+`9000=system`. See [API_DOC.md](API_DOC.md) for the full list.
 
-### Adding a built-in
+---
 
-1. Create `src/core/skills/builtins/your-skill.md` with valid frontmatter.
-2. If your skill needs to mutate the context (not just document itself),
-   add an entry in `BUILTIN_HANDLERS` inside
-   [src/core/skills/SkillManager.ts](src/core/skills/SkillManager.ts).
-3. Rebuild. The skill is live after the next server restart.
+## Project structure
 
-### Install / uninstall via the CLI
-
-```bash
-orbit skill install ./my-skill.md          # local file
-orbit skill install https://example.com/skill.md   # http(s) URL
-orbit skill install --inline "$(cat ./skill.md)"    # raw text
-
-orbit skill show timezone-greeter         # dump the .md
-orbit skill installed                    # list user installs
-orbit skill reload                       # re-scan after manual file edits
-orbit skill uninstall timezone-greeter   # admin-only
 ```
+src/
+  app.ts                       # Application class — wires middleware,
+                               # routes, services, runs startup health checks
+  liuyao/                      # 六爻 subsystem (default product)
+    skills/                    # 13 deterministic skills
+      chartAssembler.ts        #   orchestrates the 13 in fixed order
+      castSkill.ts             #   6 bits/yaoValues → 6 爻值
+      hexagramSkill.ts         #   bit pattern → 64-卦 table lookup
+      palaceSkill.ts           #   palace + 世/应
+      najiaSkill.ts            #   纳甲 (stem + branch + element)
+      sixRelativeSkill.ts      #   六亲 (五行生克)
+      sixGodSkill.ts           #   六神 (day stem → starting god)
+      voidSkill.ts             #   旬空 + mark empty lines
+      branchRelationSkill.ts   #   冲/合/刑/害 (P2 stub)
+      transformationSkill.ts   #   动爻化出 (P2 stub)
+      yongshenSkill.ts         #   用神候选 (P2 stub)
+      strengthSkill.ts         #   旺衰标签 (P2 stub)
+      fushenSkill.ts           #   伏神 (P2 stub)
+    agent/
+      analysisAgent.ts         #   runAnalysisAgent — orchestrates the report
+      reportTemplate.ts        #   6/9-section report builder
+      questionClassifier.ts    #   question type → 用神 hint
+    rag/
+      index.ts                 #   Mongo-backed RAG with per-user scoping
+    constants/                 # 排盘 tables: 64-卦, 纳甲, 五行, ...
+    types/                     # 排盘 TypeScript types (basic, chart, skill, agent)
+  core/
+    llm/                       # Multi-provider LLM adapters
+    memory/                    # TemporaryMemory (Redis) + ChartStore (Mongo)
+    agents/                    # AgentLoader (configs/agents.yaml)
+    skills/                    # Generic skill pipeline (chat preprocessing)
+    tools/                     # divination, filesystem, search, MCP
+    workflow/                  # YAML workflow engine
+    prompts/                   # System prompt loader
+  users/                       # 用户系统 (ritual tasks, profile, feed)
+  routes/                      # Express routes (chat, auth, divination, ...)
+  models/                      # Mongoose models
+  services/                    # database, DevAuth, TokenService, SkillInstaller
+  middleware/                  # auth, errorHandler
+  cli/                         # `orbit` binary (thin client over REST)
 
-### Install / uninstall via HTTP
+docs/
+  base_knowledge/              # 六爻 knowledge base (system-scope RAG corpus)
+    64卦数据.json              #   the 64-hexagram table (canonical source)
+    装卦方法.md                #   装卦 + 装六亲 + 装六神 rules
+    六爻卦理.md                #   六爻卦理 reference
+    六爻基础.md                #   入门
+    六爻用神.md                #   用神规则
+    实例应用.md                #   实例
+    排盘补充.md                #   排盘补充 (干支, 五虎五鼠遁, 旬空, 64卦详表)
+    易经详解（上/下）.md       #   易经详解
+    精华荟萃（上/下篇）.md     #   精华
+    起卦方法.md                #   起卦
 
-```bash
-# Install from a URL
-curl -X POST $API/skills/install -H "$H" -H "Content-Type: application/json" \
-  -d '{"source":"url","url":"https://example.com/skill.md"}'
-
-# Install from raw text
-curl -X POST $API/skills/install -H "$H" -H "Content-Type: application/json" \
-  -d "$(jq -n --arg body "$(cat my-skill.md)" '{source:"inline",content:$body,filename:"my-skill.md"}')"
-
-# Reload after manual edits
-curl -X POST $API/skills/reload -H "$H"
-
-# Uninstall (admin)
-curl -X DELETE $API/skills/install/<id> -H "$H"
+design.md                      # 系统设计文档 (排盘流程 + skill 列表)
+CLAUDE.md                      # 给 AI 助手的项目说明
 ```
 
 ---
 
-## 六爻 Agent (Default)
-
-The project ships with a **六爻 (Six Yang / Liu Yao / I-Ching coin oracle)
-specialist as the default agent**. Every `/chat` request without an
-`agentId` (and every `orbit chat` without `--agent`) routes to it.
-
-### Two-step flow
-
-The agent never recomputes 排盘/装卦/纳甲/六亲/六神 itself — all of
-that work is done by a deterministic engine (`src/liuyao/`). The
-**flow is intentionally split**:
-
-1. **User casts the chart once.** `orbit divination chart <bits> --session <id>`
-   runs the 13-skill pipeline, gets a `ChartResult`, and persists it
-   to the server-side `ChartStore` under the given sessionId (Redis,
-   24h TTL).
-2. **The agent reads the stored chart on demand.** When the user
-   then runs `orbit chat --session <id> "..."`, `/chat` injects the
-   chart summary into the LLM's system context, and the agent invokes
-   the `divination` tool (single action: `analyze`) to get the full
-   6/9-section report. The agent never sees raw bits and never
-   re-runs the casting pipeline.
-
-```
-User                          OrbitAgent
-  │                                │
-  │  orbit divination chart 0 1 1  │
-  │  0 1 1 --session sess_x       │
-  ├──────────────────────────────►│  POST /divination/chart
-  │                                │  → assembleChart(bits)
-  │                                │  → saveChart(sess_x, chart)
-  │  ✓ Chart assembled & stored    │
-  │◄──────────────────────────────│
-  │                                │
-  │  orbit chat --session sess_x   │
-  │  "用六爻分析这次求财"          │
-  ├──────────────────────────────►│  POST /chat
-  │                                │  → getAgent("liuyao")
-  │                                │  → render system prompt
-  │                                │  → inject chart summary
-  │                                │  → bind divination tool
-  │                                │  → LLM sees summary + tool
-  │                                │  → LLM calls divination(analyze)
-  │                                │  → tool reads ChartStore
-  │                                │  → runAnalysisAgent(chart)
-  │                                │  → re-chat with report
-  │  完整 6 段报告 + RAG 引用     │
-  │◄──────────────────────────────│
-```
-
-### The "liuyao" agent
-
-- **id:** `default` (alias: `liuyao`) — both ids resolve to the
-  same config so callers can pick whichever reads better.
-- **model:** `deepseek-v4-flash` (cache-friendly: the system prompt
-  + skill list is ~1280 tokens and 100% hits the prompt cache).
-- **tools:** `divination` only. The agent cannot invoke `filesystem`
-  or `search` — those are reserved for the `coding` agent.
-- **systemPromptId:** `liuyao-agent` →
-  [prompts/system/liuyao-agent.yaml](prompts/system/liuyao-agent.yaml).
-  Hard rules: no recomputation, cite RAG sources, no absolute
-  judgments ("一定成" / "必发财" are forbidden).
-- **Generic alternative:** `agentId: "generic"` (or the CLI's
-  `--agent generic`) routes to a vanilla chat agent with no
-  divination behavior — use this if you want the LLM call without
-  any of the 六爻 machinery.
-
-### CLI quickstart
+## Development
 
 ```bash
-# 1. Cast the chart. Save it under a session id of your choice.
-orbit divination chart 0 1 1 0 1 1 \
-  --session sess_demo \
-  --question "求财" \
-  --day-stem 甲 --day-branch 子
-# → ✓ Chart assembled and stored.
-#   sessionId: sess_demo
-#   Next: orbit chat --session sess_demo "帮我分析"
-
-# 2. Talk to the agent on the same session.
-orbit chat --session sess_demo "帮我分析这次求财的运势"
-
-# 3. The same chart is now bound to sess_demo for 24h.
-#    orbit chat "..."  on a *different* session has no chart context.
+npm run dev          # ts-node + dotenv hot-load
+npm run build        # tsc → dist/
+npm run typecheck    # tsc --noEmit
+npm run lint         # eslint
+npm run test         # jest
+npm run test:unit    # unit only (76/76 pass — covers 排盘 first step)
+npm run test:integration  # integration only (28/28 pass — needs live Mongo + Redis)
 ```
 
-### CLI reference for divination
-
-```bash
-orbit divination cast 0 1 1 0 1 1              # bits → CastResult (no storage)
-orbit divination chart 0 1 1 0 1 1 --session X  # full chart + persist to store
-orbit divination analyze /tmp/chart.json       # stand-alone report from a file
-orbit divination analyze                       # reads last chart from current session
-orbit divination rag stats|search Q|rebuild
-```
-
-The `analyze` command and the `divination` tool both work in two
-modes: pass a `chart` object inline, OR pass a `sessionId` and the
-server reads the stored chart.
-
-### API surface
-
-```
-POST /api/v1/divination/cast        # 6 bits → CastResult (no storage)
-POST /api/v1/divination/chart       # {bits, sessionId, ...} → ChartResult + persist
-GET  /api/v1/divination/chart/keys/:sessionId  # list stored chart keys
-POST /api/v1/divination/analyze     # {chart} OR {sessionId} → AnalysisReport
-GET  /api/v1/divination/rag/stats   # RAG index stats
-POST /api/v1/divination/rag/search  # top-k chunks for a query
-POST /api/v1/divination/rag/rebuild # rebuild the RAG index
-
-POST /api/v1/chat                   # main chat; agentId defaults to "default" (= liuyao)
-```
-
-### What's still missing
-
-The deterministic engine needs hard-coded data tables that the user
-must source externally. See [docs/liuyao/KNOWLEDGE_NEEDED.md](docs/liuyao/KNOWLEDGE_NEEDED.md)
-for the per-section status. The highest-priority gap is the
-**64 hexagrams table** (P0) — until that is filled in, every chart
-returns warnings[] noting the empty table, and the agent will tell
-the user "本卦/变卦不可识别" rather than papering over the gap.
+Path aliases (`@core/*`, `@config/*`, `@routes/*`, …) are defined in
+both [tsconfig.json](tsconfig.json) and [jest.config.js](jest.config.js) —
+update both when adding a new alias.
 
 ---
 
-## CLI (`orbit`)
+## Status
 
-After `npm run build && npm link`, the `orbit` command is available on your PATH. The CLI is a **thin client over the existing backend REST API** — it does not re-implement any business logic, it just calls the same `/api/v1/*` endpoints the web UI / mobile app use.
+**First-step 排盘**: complete. The deterministic engine produces a
+fully-decorated chart for any of the 64 hexagrams (bits or yaoValues
+input, with or without dayStem/dayBranch); no `warnings[]` for the
+first-step data.
 
-### Install
+**Agent layer**: ships a working `default` agent that calls
+`runAnalysisAgent` (currently a thin template wrapper) → RAG-cited
+6-section report. The LLM is wired to refuse to recompute any chart
+field; it can only interpret what's in the ChartResult.
 
-```bash
-npm install         # installs commander + chalk
-npm run build       # compiles src/cli → dist/cli/index.js (auto chmod +x)
-npm link            # registers the `orbit` shim on your PATH
-```
+**P2 work** (still TODO, surfaces as `warnings[]` on the chart
+response): 冲合刑害破完整规则, calendar skill (公历→干支自动推算),
+完整用神候选规则, 旺衰量化打分, 伏神/飞神, 化进化退.
 
-### Start the backend first
-
-The CLI is a client only — the backend must be running:
-
-```bash
-# terminal A
-npm run dev
-```
-
-### Basic flow
-
-```bash
-# terminal B
-orbit login --dev                 # get a 30-day dev JWT, stored in ~/.orbit/token.json
-orbit whoami                      # dev@test.local
-
-orbit chat "hello"                # single turn
-orbit chat --stream "hello"       # SSE streaming
-orbit chat --session sess_abc "my name is erwin"
-orbit chat --session sess_abc "what's my name?"  # multi-turn (Redis history auto-injected)
-
-orbit history sess_abc --limit 5
-```
-
-### Command reference
-
-| Command | Backend endpoint | Description |
-|---|---|---|
-| `orbit` | — | Print base URL, home dir, and login state |
-| `orbit login [--dev] [--email E --password P]` | `POST /auth/login` or `POST /dev/token` | Persist a JWT; `--dev` skips the password |
-| `orbit logout` | — | Delete the stored token |
-| `orbit whoami` | — | Show the current login |
-| `orbit chat [msg...]` | `POST /chat` | Single turn; supports `--stream` `--session ID` `-m/--model` `-p/--provider` `--system TEXT`; reads stdin if no arg given |
-| `orbit history <sessionId> [-l N]` | `GET /chat/:sessionId` | Pull temporary chat history |
-| `orbit models [-p provider] [--ids]` | `GET /models` | Group by provider; `--ids` prints one ID per line for piping |
-| `orbit health` | `GET /models/health` | LLM provider health table |
-| `orbit switch <provider> <model>` | `POST /models/switch` | Change server default; also writes to local config |
-| `orbit defaults` | `GET /models/defaults/current` | Show server default |
-| `orbit skills` | `GET /skills` | Loaded skills |
-| `orbit tools` | `GET /tools` | Tools + JSON schema |
-| `orbit exec <name> -p <json>` | `POST /tools/execute` | Run a tool; e.g. `orbit exec filesystem -p '{"operation":"list","path":"."}'` |
-| `orbit workflows` | `GET /workflows` | List workflows |
-| `orbit workflow-run <name> [-v V] -c <json>` | `POST /workflows/:name/execute` | Execute a workflow |
-| `orbit usage` | `GET /usage/stats` | summary + byModel + daily |
-| `orbit pricing` | `GET /usage/pricing` | Pricing reference (includes `cacheHitPricePerM`) |
-| `orbit config show` | — | Print the current effective config |
-| `orbit config set-base <url>` | — | Change the backend URL (e.g. point at a LAN machine) |
-| `orbit config set-model <provider> <model>` | — | Persist a default model so you don't pass `-m` every time |
-
-### State files (`~/.orbit/`)
-
-| File | Contents | Permissions |
-|---|---|---|
-| `config.json` | `baseUrl`, `defaultProvider?`, `defaultModel?` | 0644 |
-| `token.json` | `{token, userId, email, isAdmin, savedAt}` | 0600 |
-
-### Environment variable overrides
-
-```bash
-ORBIT_HOME=/custom/path orbit login                          # default: ~/.orbit
-ORBIT_BASE_URL=http://x.y.z:3000/api/v1 orbit chat "hi"      # one-off backend
-ORBIT_MODEL=claude-3-5-sonnet-20241022 ORBIT_PROVIDER=anthropic orbit chat "hi"
-```
-
-### Adding a new command
-
-`src/cli/commands/foo.ts`:
-
-```ts
-import { Command } from 'commander';
-import { apiGet } from '../http';
-export function registerFoo(program: Command): void {
-  program.command('foo').action(async () => {
-    const data = await apiGet<any>('/some/endpoint');
-    console.log(data);
-  });
-}
-```
-
-Then import it at the top of [src/cli/index.ts](src/cli/index.ts) and call `registerFoo(program)` at the bottom. Build with `npm run build` and the new command is live.
-
----
-
-## Scripts
-
-```bash
-npm run dev          # Development mode
-npm run build        # Build for production (also builds the orbit CLI)
-npm start            # Run production server
-npm test             # Run tests
-npm run typecheck    # TypeScript check
-npm run cli          # Run the CLI in dev mode via ts-node (no build needed)
-```
+The 排盘 pipeline's stage-by-stage table of which data is sourced
+externally vs. computed inline is tracked in
+`docs/liuyao/KNOWLEDGE_NEEDED.md` (P0 = 64-hexagram table, now ✅).
 
 ---
 
 ## License
 
-MIT
+MIT.
