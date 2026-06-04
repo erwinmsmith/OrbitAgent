@@ -107,6 +107,66 @@ the engine produced what you expected before sending it to the LLM.
 The bits/yao encoding is documented in the CLI's `--help` and in
 `docs/base_knowledge/装卦方法.md`.
 
+### Yao value encoding
+
+A 卦 (hexagram) is 6 lines stacked bottom-to-top (初爻 at position 1
+is the bottom line, 上爻 at position 6 is the top). Each line has
+two attributes: a yin/yang polarity and, for moving lines, a flip
+flag. OrbitAgent accepts two equivalent encodings:
+
+| Encoding | CLI form | Static lines | Moving lines | Notes |
+|---|---|---|---|---|
+| `bits` | `orbit divination chart 0 1 1 0 1 1` | `0` = 阴, `1` = 阳 | **not supported** | Simplest input — 0/1 per line bottom-to-top. Internally mapped to yao `8` (阴) and `7` (阳). No 老阳 / 老阴 so no moving lines. |
+| `yaoValues` | `orbit divination chart --yao 7 7 9 7 8 6` | `7` = 少阳, `8` = 少阴 | `9` = 老阳 (→ flips to 阴), `6` = 老阴 (→ flips to 阳) | Use this when you want moving lines. Output the 6 numbers bottom-to-top. |
+
+The 4 yao values come from the standard 火珠林 (Liu Yi) three-coin
+method. If you want to derive them yourself instead of letting the
+CLI do it:
+
+```
+3 coins (背面=0, 正面=1)        yao value   name    line
+0 back, 3 face   (交)            6          老阴    yin,  moving
+1 back, 2 face   (单)            7          少阳    yang, static
+2 back, 1 face   (拆)            8          少阴    yin,  static
+3 back, 0 face   (重)            9          老阳    yang, moving
+```
+
+So if you flip three coins and see 1 back + 2 face, that throw is
+少阳 = 7. Repeat 6 times to fill the 6 lines bottom-to-top. The CLI
+will accept the resulting sequence via `--yao`.
+
+**Direction matters.** The 6 numbers are always given **bottom
+line first** (初爻 → 上爻). `orbit divination chart 1 1 1 1 1 1`
+draws 乾 (six yang); `0 0 0 0 0 0` draws 坤 (six yin). Reversing
+the order gives the inverse hexagram.
+
+**Examples**:
+
+```bash
+# 乾 (all yang, static)
+orbit divination chart 1 1 1 1 1 1
+
+# 坤 (all yin, static)
+orbit divination chart 0 0 0 0 0 0
+
+# 乾 with 1 moving line at position 3 (老阳 → flips to yin)
+orbit divination chart --yao 7 7 9 7 7 7
+
+# 坤 with 1 moving line at position 1 (老阴 → flips to yang)
+orbit divination chart --yao 6 8 8 8 8 8
+
+# Real 3-coin session: every throw is one yao value, bottom-up
+# e.g. throws came out 拆 拆 重 拆 单 单 → 8 8 9 8 7 7
+orbit divination chart --yao 8 8 9 8 7 7
+```
+
+**Why two encodings?** The `bits` form is the easy default for
+quick tests and for callers that don't care about moving lines (no
+六爻 reader asks "will I get the job" without wanting to know the
+动爻). The `yaoValues` form is what you use when you've actually
+flipped coins or when you want the engine to render a 变卦 with
+动爻化出.
+
 ---
 
 ## Framework capabilities — what's behind the engine
