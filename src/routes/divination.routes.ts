@@ -13,7 +13,14 @@
  *                                 under (userId, sessionId, chartKey)
  *   POST /analyze               — accepts {chart: ...} OR {sessionId}
  *                                 to read from the store (latter is what
- *                                 the agent uses)
+ *                                 the agent uses). Runs the full
+ *                                 multi-stage pipeline (brief → understand
+ *                                 → RAG → synthesize). Pass `debug: true`
+ *                                 to get the full timeline.
+ *   GET  /brief/:sessionId      — read just the structured ChartBrief
+ *                                 (the deterministic material that the
+ *                                 analyze pipeline feeds to its first
+ *                                 LLM call). No LLM cost.
  *   GET  /chart/keys/:sessionId — list stored chart keys for the
  *                                 caller's session
  *
@@ -39,6 +46,7 @@ import { authMiddleware, adminOnly } from '../middleware/auth';
 import { castSkill } from '../liuyao/skills/castSkill';
 import { assembleChart, type AssembleInput } from '../liuyao/skills/chartAssembler';
 import { runAnalysisAgent } from '../liuyao/agent/analysisAgent';
+import { buildChartBrief } from '../liuyao/agent/chartBrief';
 import {
   search, ragStats, ingestDocument, deleteDocument, bootstrapSystemKnowledge,
   resolveEmbedder,
@@ -143,6 +151,7 @@ router.get('/chart/keys/:sessionId', asyncHandler(async (req: Request, res: Resp
 router.post('/analyze', asyncHandler(async (req: Request, res: Response) => {
   const userId = userIdOrThrow(req);
   const body = req.body || {};
+  const includeDebug = body.debug === true || body.debug === 'true';
   let chart = body.chart;
 
   // Resolve chart: inline → sessionId+chartKey (specific) → sessionId
@@ -169,8 +178,42 @@ router.post('/analyze', asyncHandler(async (req: Request, res: Response) => {
       'Either a `chart` object or a `sessionId` (with stored chart) is required',
       HTTP_STATUS.BAD_REQUEST);
   }
-  const report = await runAnalysisAgent(chart, userId, isAdmin(req));
-  res.json({ success: true, data: report });
+  // runAnalysisAgent now runs the full multi-stage pipeline
+  // (build brief → LLM #1 understand → RAG retrieve → LLM #2
+  // synthesize). The result includes { report, brief, debug }.
+  const result = await runAnalysisAgent(chart, userId, isAdmin(req), { debug: includeDebug });
+  // Backward-compat: when the caller didn't ask for debug, return
+  // just the report at the top level (the old shape).
+  if (!includeDebug) {
+    res.json({ success: true, data: result.report });
+  } else {
+    res.json({ success: true, data: result });
+  }
+}));
+
+// ─── GET /brief/:sessionId ────────────────────────────────────────────
+// Read the structured ChartBrief for the latest chart on the given
+// session. The brief is the deterministic "understanding material"
+// doc that gets fed to the LLM in the analyze pipeline. This
+// endpoint lets a caller inspect it on its own without running the
+// pipeline (or paying for the LLM calls).
+router.get('/brief/:sessionId', asyncHandler(async (req: Request, res: Response) => {
+  const userId = userIdOrThrow(req);
+  const chartKey = (req.query.chartKey as string) || undefined;
+  let stored;
+  try {
+    stored = chartKey
+      ? await getChart(userId, req.params.sessionId, chartKey)
+      : await getLatestChart(userId, req.params.sessionId);
+  } catch (err: any) {
+    throw new AppError('CHART_NOT_FOUND', err.message, HTTP_STATUS.NOT_FOUND);
+  }
+  if (!stored) {
+    throw new AppError('CHART_NOT_FOUND',
+      `No stored chart for sessionId=${req.params.sessionId}`,
+      HTTP_STATUS.NOT_FOUND);
+  }
+  res.json({ success: true, data: buildChartBrief(stored.chart) });
 }));
 
 // ──────────────────────────────────────────────────────────────────────

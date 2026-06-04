@@ -65,7 +65,8 @@ function sendSSEError(res: Response, errorCode: string, errorMessage: string, se
 // POST /chat - Send message (non-streaming)
 // ============================================================
 router.post('/', asyncHandler(async (req: Request, res: Response) => {
-  const { sessionId, message, agentId } = req.body;
+  const { sessionId, message, agentId, debug } = req.body;
+  const showDebug = debug === true || debug === 'true';
   let { model, provider } = req.body;
   const userId = req.user?.userId || req.apiKey?.userId;
 
@@ -275,7 +276,13 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
     const divTool = toolManager.getToolByName('divination');
     if (divTool) {
       if (typeof (divTool as any).setBoundSession === 'function') {
-        (divTool as any).setBoundSession(session, userId, !!req.user?.isAdmin);
+        // Pass the agent's resolved model so the analyze pipeline's two
+        // LLM calls go to the right provider. The agent's config is
+        // the source of truth (configs/agents.yaml). Body-supplied
+        // --model from the caller still wins at the chat-LLM level
+        // (we already resolved it above) but the analyze pipeline
+        // should follow the agent's choice so cache hits stay stable.
+        (divTool as any).setBoundSession(session, userId, !!req.user?.isAdmin, agent?.model);
       } else if (typeof (divTool as any).setBoundSessionId === 'function') {
         // Back-compat: older DivinationTool build that only knows sessionId.
         (divTool as any).setBoundSessionId(session);
@@ -288,6 +295,14 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
   // loop at MAX_TOOL_ITERATIONS to prevent runaway.
   const MAX_TOOL_ITERATIONS = 5;
   const toolCallLog: Array<{ name: string; ok: boolean; error?: string }> = [];
+  // Debug capture: when the caller passes `debug: true`, surface the
+  // full multi-stage pipeline timeline (build brief → LLM #1 understand
+  // → RAG retrieve → LLM #2 synthesize) so they can audit each step.
+  // The divination.analyze tool now returns { report, brief, debug };
+  // we keep the whole thing and let the response builder pick what to
+  // render.
+  let lastAnalysisResult: any = null;   // { report, brief, debug }
+  let lastRagSearch: any[] = [];
   let response = await llmManager.chat(llmMessages, {
     model,
     tools: tools.length > 0 ? tools : undefined,
@@ -302,6 +317,7 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
     for (const call of calls) {
       const tool = toolManager?.getToolByName?.(call.name);
       let resultText: string;
+      let parsedResult: any = null;
       let ok = true;
       let errorMsg: string | undefined;
       if (!tool) {
@@ -311,7 +327,25 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
       } else {
         try {
           const result = await tool.execute(call.input as any);
+          // Keep the parsed object around for debug capture — the LLM
+          // sees the JSON-stringified version, but the caller (when
+          // `debug: true`) can read the structured shape directly.
+          parsedResult = result;
           resultText = typeof result === 'string' ? result : JSON.stringify(result);
+          if (call.name === 'divination') {
+            const action = (call.input as any)?.action;
+            if (action === 'analyze' && result && typeof result === 'object') {
+              // { report, brief, debug } — the full pipeline state.
+              lastAnalysisResult = result;
+            } else if (action === 'inspect' && result && typeof result === 'object') {
+              toolCallLog[toolCallLog.length - 1] = {
+                ...(toolCallLog[toolCallLog.length - 1] || { name: 'divination', ok: true }),
+                name: 'divination.inspect',
+              };
+            } else if (action === 'rag-search' && Array.isArray(result)) {
+              lastRagSearch = result;
+            }
+          }
         } catch (err: any) {
           ok = false;
           errorMsg = err?.message ?? String(err);
@@ -418,18 +452,45 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
     }).catch(err => logger.error('Failed to record token usage:', err));
   }
 
+  const responseData: Record<string, unknown> = {
+    sessionId: session,
+    messageId: response.id,
+    content: response.content,
+    model: response.model,
+    provider: response.provider,
+    finishReason: response.finishReason,
+    usage: response.usage,
+    toolCalls: response.toolCalls,
+  };
+  if (showDebug) {
+    // `debug: true` exposes the FULL multi-stage pipeline timeline
+    // so the caller can audit each step (build brief → LLM #1
+    // understand → RAG retrieve → LLM #2 synthesize). The pipeline
+    // state is captured inside the divination tool's analyze result;
+    // here we just project it into the response.
+    const analysisReport = lastAnalysisResult?.report;
+    const analysisDebug = lastAnalysisResult?.debug;
+    responseData.debug = {
+      toolCalls: toolCallLog,
+      // The legacy "rag" block is kept for callers that already
+      // depend on it (e.g. earlier orbit CLI versions). It now points
+      // at the structured pipeline output instead of a one-shot
+      // template.
+      rag: {
+        citations: analysisReport?.citations ?? [],
+        questionType: analysisReport?.understanding?.questionType ?? null,
+        missingContext: analysisReport?.understanding?.missingContext ?? [],
+        ragSearch: lastRagSearch,
+      },
+      // The new full-pipeline timeline. Every stage has its own
+      // wall-clock + meta (model, usage, query list, hit count).
+      pipeline: analysisDebug ?? null,
+    };
+  }
+
   res.json({
     success: true,
-    data: {
-      sessionId: session,
-      messageId: response.id,
-      content: response.content,
-      model: response.model,
-      provider: response.provider,
-      finishReason: response.finishReason,
-      usage: response.usage,
-      toolCalls: response.toolCalls,
-    },
+    data: responseData,
   });
 }));
 

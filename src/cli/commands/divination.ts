@@ -5,7 +5,14 @@
  *   cast <b1>..<b6>           — six raw bits (0|1) → CastResult
  *   chart <b1>..<b6> [--question Q] [--day-stem 甲] [--day-branch 子] ...
  *                                — full ChartResult
+ *   brief --session <id>       — read the structured ChartBrief for a stored
+ *                                chart (the deterministic "understanding
+ *                                material" doc that the analyze pipeline
+ *                                feeds to its first LLM call). No LLM cost.
  *   analyze <chart.json>       — run the analysis agent on a chart
+ *                                (multi-stage pipeline: brief → understand
+ *                                → RAG → synthesize). --debug prints the
+ *                                full timeline.
  *   rag stats | search Q       — query the RAG index
  *   rag rebuild                — rebuild the RAG index
  *   rag upload <file.md>       — ingest a markdown file (user-scope; --system for admin)
@@ -139,8 +146,9 @@ export function registerDivination(program: Command): void {
     });
 
   cmd.command('analyze <file>')
-    .description('Run the analysis agent on a chart read from a JSON file (e.g. one produced by `chart`)')
-    .action(async (file: string) => {
+    .description('Run the analysis agent on a chart read from a JSON file (e.g. one produced by `chart`). Pass --debug to see the full multi-stage pipeline timeline.')
+    .option('--debug', 'Show the full pipeline timeline: build brief → LLM #1 understand → RAG retrieve → LLM #2 synthesize')
+    .action(async (file: string, opts) => {
       let chart: any;
       try {
         const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
@@ -155,7 +163,10 @@ export function registerDivination(program: Command): void {
         process.exit(1);
       }
       try {
-        const report = await apiPost<any>('/divination/analyze', { chart });
+        const data = await apiPost<any>('/divination/analyze', { chart, debug: !!opts.debug });
+        // When debug=false, the route returns the report at the top
+        // level. When debug=true, it returns { report, brief, debug }.
+        const report = data.report ?? data;
         // Render the report sections in fixed order.
         const order = [
           ['summary',                       '一、排盘摘要'],
@@ -185,6 +196,30 @@ export function registerDivination(program: Command): void {
             console.log(chalk.gray(`  · ${c.source} (score=${c.score.toFixed(3)})`));
             console.log(chalk.gray(`    ${c.snippet}`));
           }
+        }
+        if (opts.debug && data.debug) {
+          renderPipelineTimeline(data.debug);
+        }
+      } catch (err: any) { console.error(chalk.red(`✗ ${err.message}`)); process.exit(1); }
+    });
+
+  cmd.command('brief')
+    .description('Read the structured ChartBrief for a stored chart. The brief is the deterministic "understanding material" doc that the analyze pipeline feeds to its first LLM call — inspect it on its own without paying for LLM calls.')
+    .requiredOption('-s, --session <id>', 'Session id (same as the one passed to `chart`)')
+    .option('--chart-key <k>', 'Logical name for the chart within the session (default: latest)', undefined as string | undefined)
+    .option('--json', 'Print the full structured brief as JSON (default: print the markdown rendering)', false)
+    .action(async (opts) => {
+      const qs = new URLSearchParams();
+      if (opts.chartKey) qs.set('chartKey', opts.chartKey);
+      const url = `/divination/brief/${encodeURIComponent(opts.session)}${qs.toString() ? `?${qs.toString()}` : ''}`;
+      try {
+        const brief = await apiGet<any>(url);
+        if (opts.json) {
+          console.log(JSON.stringify(brief, null, 2));
+        } else {
+          console.log(chalk.bold(`ChartBrief for session ${chalk.cyan(opts.session)}`));
+          console.log(chalk.gray('─'.repeat(60)));
+          console.log(brief.asMarkdown);
         }
       } catch (err: any) { console.error(chalk.red(`✗ ${err.message}`)); process.exit(1); }
     });
@@ -316,6 +351,125 @@ function parseSixBits(bits: string[]): [0 | 1, 0 | 1, 0 | 1, 0 | 1, 0 | 1, 0 | 1
     out[i] = (v === '1' ? 1 : 0) as 0 | 1;
   }
   return out;
+}
+
+/** Pretty-print the multi-stage pipeline timeline returned by
+ *  `runAnalysisAgent` (or wrapped in `/chat` debug). Used by both
+ *  `orbit divination analyze --debug` and `orbit chat --debug`. */
+export function renderPipelineTimeline(debug: any): void {
+  if (!debug) return;
+  const pipeline = debug.pipeline as Array<{
+    stage: string;
+    durationMs: number;
+    meta: Record<string, unknown>;
+  }>;
+  const titleSep = chalk.gray('─'.repeat(60));
+  console.log();
+  console.log(chalk.bold.cyan('分析流程时间线 (pipeline)'));
+  console.log(titleSep);
+  if (Array.isArray(pipeline)) {
+    for (const step of pipeline) {
+      const stageLabel = stageDisplayName(step.stage);
+      const ms = `${step.durationMs}ms`;
+      const detail = stageDetail(step);
+      console.log(`${chalk.bold(stageLabel)}  ${chalk.gray(ms)}${detail ? '  ' + chalk.gray(detail) : ''}`);
+    }
+  }
+
+  // Stage 1 detail: the LLM's intermediate understanding.
+  const u = debug.understanding;
+  if (u) {
+    console.log();
+    console.log(chalk.cyan('  [理解阶段输出]'));
+    if (u.refinedQuestionType) console.log(`    细化的提问类型: ${chalk.yellow(u.refinedQuestionType)}`);
+    if (Array.isArray(u.focusYongshen) && u.focusYongshen.length) {
+      console.log(`    焦点用神: ${chalk.yellow(u.focusYongshen.join('、'))}`);
+    }
+    if (Array.isArray(u.ragQueries) && u.ragQueries.length) {
+      console.log(`    LLM 提出的 RAG 查询 (${u.ragQueries.length} 个):`);
+      for (const q of u.ragQueries) console.log(`      · ${chalk.cyan(q)}`);
+    }
+    if (u.intermediateUnderstanding) {
+      const prose = String(u.intermediateUnderstanding).replace(/\s+/g, ' ').slice(0, 300);
+      console.log(`    中间理解: ${chalk.gray(prose)}${prose.length >= 300 ? '…' : ''}`);
+    }
+  }
+
+  // Stage 2 detail: the actual RAG hits with provenance.
+  const rag = debug.rag;
+  if (rag) {
+    console.log();
+    console.log(chalk.cyan('  [RAG 召回]'));
+    if (Array.isArray(rag.queries) && rag.queries.length) {
+      console.log(`    总查询数: ${chalk.yellow(rag.queries.length)}`);
+      console.log(`    合并去重后的 top-k: ${chalk.yellow((rag.deduped ?? []).length)}`);
+      console.log('    每个查询的命中:');
+      const perQ = rag.perQueryHits ?? [];
+      for (const r of perQ) {
+        console.log(`      · ${chalk.cyan(r.query)}  hits=${chalk.yellow(r.hitCount)}  topScore=${(r.topScore ?? 0).toFixed(3)}`);
+      }
+    } else {
+      console.log('    没有 RAG 查询');
+    }
+    if (Array.isArray(rag.deduped) && rag.deduped.length) {
+      console.log('    去重后的命中 (含来源追溯):');
+      for (const d of rag.deduped) {
+        const prov = Array.isArray(d.provenanceQueries) && d.provenanceQueries.length
+          ? chalk.gray(` ← [${d.provenanceQueries.join(', ')}]`)
+          : '';
+        console.log(`      - ${chalk.cyan(d.source)}  ${chalk.gray(d.title)}  score=${d.score.toFixed(3)}${prov}`);
+      }
+    }
+  }
+
+  // Stage 3 detail: synthesis model + token usage.
+  const s = debug.synthesis;
+  if (s) {
+    console.log();
+    console.log(chalk.cyan('  [综合分析阶段]'));
+    console.log(`    model: ${chalk.yellow(s.model)}  provider: ${chalk.yellow(s.provider)}`);
+    if (s.usage) {
+      const u = s.usage;
+      console.log(`    tokens: in=${u.inputTokens ?? 0}  out=${u.outputTokens ?? 0}  cacheHit=${u.cacheHitTokens ?? 0}`);
+    }
+  }
+
+  console.log(titleSep);
+  console.log(chalk.gray(`总耗时: ${debug.totalDurationMs ?? 0}ms`));
+}
+
+function stageDisplayName(stage: string): string {
+  switch (stage) {
+    case 'build-brief':    return '①  构建 ChartBrief';
+    case 'understand':     return '②  LLM #1 — 理解';
+    case 'rag-retrieve':   return '③  RAG 召回';
+    case 'synthesize':     return '④  LLM #2 — 综合分析';
+    default:                return stage;
+  }
+}
+
+function stageDetail(step: { stage: string; meta: Record<string, unknown> }): string {
+  const m = step.meta || {};
+  switch (step.stage) {
+    case 'build-brief':
+      return `lines=${m.lineCount ?? '?'}`;
+    case 'understand': {
+      const u = m.usage as { inputTokens?: number; outputTokens?: number } | undefined;
+      const tokens = u ? `in=${u.inputTokens ?? 0} out=${u.outputTokens ?? 0}` : '';
+      const model = m.model ? `${m.model}` : '';
+      return `${model} ${tokens}`.trim();
+    }
+    case 'rag-retrieve':
+      return `queries=${m.queryCount ?? 0} hits=${m.totalHitCount ?? 0} deduped=${m.dedupedCount ?? 0}`;
+    case 'synthesize': {
+      const u = m.usage as { inputTokens?: number; outputTokens?: number } | undefined;
+      const tokens = u ? `in=${u.inputTokens ?? 0} out=${u.outputTokens ?? 0}` : '';
+      const len = m.contentLength ? `${m.contentLength}chars` : '';
+      return `${m.model ?? '?'} ${tokens} ${len}`.trim();
+    }
+    default:
+      return '';
+  }
 }
 
 function parseSixYao(values: string[]): [6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8 | 9] {

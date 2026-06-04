@@ -9,8 +9,9 @@ import axios from 'axios';
 import chalk from 'chalk';
 import { generateSessionId, now } from '../../utils/helpers';
 import { apiPost } from '../http';
-import { getDefaultModel, getDefaultProvider, getToken } from '../config';
+import { getToken } from '../config';
 import { unwrap } from './_util';
+import { renderPipelineTimeline } from './divination';
 
 export function registerChat(program: Command): void {
   program
@@ -22,6 +23,7 @@ export function registerChat(program: Command): void {
     .option('--stream', 'Stream tokens via Server-Sent Events (POST /chat/stream)')
     .option('--system <text>', 'Prepend a system message (note: not all models honor it)')
     .option('--agent <id>', 'Agent id from configs/agents.yaml. Default agent for this project is the 六爻 specialist — pass `generic` if you want a vanilla LLM call without divination behaviour.')
+    .option('--debug', 'Show the full multi-stage analysis pipeline timeline (build brief → LLM #1 understand → RAG retrieve → LLM #2 synthesize) plus RAG citations and tool calls.')
     .action(async (messageParts: string[], opts) => {
       const message = messageParts.length ? messageParts.join(' ') : await readStdin();
       if (!message.trim()) {
@@ -34,11 +36,19 @@ export function registerChat(program: Command): void {
       }
 
       const session = opts.session || generateSessionId();
-      const model = opts.model || getDefaultModel();
-      const provider = opts.provider || getDefaultProvider();
-      const body: any = { sessionId: session, message, model, provider };
+      const body: any = { sessionId: session, message };
+      // Only send model/provider in the body when the caller EXPLICITLY
+      // passes --model / --provider. The agent's own model (from
+      // configs/agents.yaml) is the source of truth — falling back to
+      // ~/.orbit/config.json's defaultModel would silently override it
+      // (e.g. "I set `default` agent to deepseek-v4-flash but my CLI
+      // default is glm-4-flash, so /chat sends glm"). If the caller
+      // didn't type --model, let the route pick the agent's model.
+      if (opts.model) body.model = opts.model;
+      if (opts.provider) body.provider = opts.provider;
       if (opts.system) body.systemPrompt = opts.system;
       if (opts.agent) body.agentId = opts.agent;
+      if (opts.debug) body.debug = true;
 
       if (opts.stream) {
         await runStream(body, session);
@@ -61,7 +71,7 @@ async function readStdin(): Promise<string> {
 async function runBlocking(body: any, session: string): Promise<void> {
   try {
     const data = await apiPost<any>('/chat', body);
-    // data shape: { sessionId, content, model, provider, usage, toolCalls }
+    // data shape: { sessionId, content, model, provider, usage, toolCalls, debug? }
     process.stdout.write(data.content);
     if (!data.content.endsWith('\n')) process.stdout.write('\n');
     process.stderr.write(chalk.gray(
@@ -69,6 +79,41 @@ async function runBlocking(body: any, session: string): Promise<void> {
       ` • in=${data.usage?.inputTokens ?? 0} out=${data.usage?.outputTokens ?? 0}` +
       ` • cacheHit=${data.usage?.cacheHitTokens ?? 0}]\n`,
     ));
+    if (body.debug && data.debug) {
+      // Print the full multi-stage pipeline timeline. The render is
+      // shared with `orbit divination analyze --debug` so the output
+      // shape is consistent across both commands.
+      if (data.debug.pipeline) {
+        renderPipelineTimeline(data.debug.pipeline);
+      }
+      // Legacy rag block (citations + ragSearch) for backward compat.
+      const rag = data.debug.rag || {};
+      if ((rag.citations && rag.citations.length) || (rag.ragSearch && rag.ragSearch.length)) {
+        process.stderr.write(chalk.cyan('RAG citations (final report):\n'));
+        for (const c of rag.citations || []) {
+          process.stderr.write(chalk.cyan(
+            `  - ${c.source}  score=${(c.score ?? 0).toFixed(3)}\n` +
+            `    ${(c.snippet || '').replace(/\s+/g, ' ').slice(0, 160)}\n`,
+          ));
+        }
+        if (rag.ragSearch?.length) {
+          process.stderr.write(chalk.cyan('\nExplicit rag-search tool calls:\n'));
+          for (const h of rag.ragSearch) {
+            process.stderr.write(chalk.cyan(
+              `  - ${h.source} (${h.title})  score=${(h.score ?? 0).toFixed(3)}\n`,
+            ));
+          }
+        }
+      }
+      if (data.debug.toolCalls?.length) {
+        process.stderr.write(chalk.cyan('\nChat-loop tool calls:\n'));
+        for (const t of data.debug.toolCalls) {
+          process.stderr.write(chalk.cyan(
+            `  - ${t.name} ${t.ok ? '✓' : '✗'}${t.error ? ` (${t.error})` : ''}\n`,
+          ));
+        }
+      }
+    }
   } catch (err: any) {
     console.error(chalk.red(`✗ ${err.message}`));
     process.exit(1);
