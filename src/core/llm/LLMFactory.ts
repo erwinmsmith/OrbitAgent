@@ -271,6 +271,7 @@ export class LLMManager {
 
   async listAllModels(): Promise<ModelInfo[]> {
     const allModels: ModelInfo[] = [];
+    const seen = new Set<string>();        // dedupe key = `${provider}::${id}`
 
     // Add models from compatible providers
     for (const [providerKey, providerConfig] of Object.entries(COMPATIBLE_PROVIDERS)) {
@@ -287,14 +288,21 @@ export class LLMManager {
           vision: false,
         },
       }));
-      allModels.push(...models);
+      for (const m of models) {
+        const k = `${providerKey}::${m.id}`;
+        if (!seen.has(k)) { seen.add(k); allModels.push(m); }
+      }
     }
 
-    // Add models from initialized adapters
+    // Add models from initialized adapters (only if not already in
+    // the compatible-providers table for the same provider+id).
     for (const [provider, adapter] of this.adapters) {
       try {
         const models = await adapter.listModels();
-        allModels.push(...models);
+        for (const m of models) {
+          const k = `${provider}::${m.id}`;
+          if (!seen.has(k)) { seen.add(k); allModels.push(m); }
+        }
       } catch (error) {
         logger.warn(`Failed to list models for ${provider}`);
       }

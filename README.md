@@ -379,7 +379,21 @@ update both when adding a new alias.
 **First-step 排盘**: complete. The deterministic engine produces a
 fully-decorated chart for any of the 64 hexagrams (bits or yaoValues
 input, with or without dayStem/dayBranch); no `warnings[]` for the
-first-step data.
+first-step data. dayStem/dayBranch/monthBranch/hourBranch/xunkong
+are auto-derived from the caller's `datetime` (or "now") via the
+[lunar-typescript](https://www.npmjs.com/package/lunar-typescript)
+calendar skill (`src/liuyao/skills/calendarSkill.ts`); the time
+block + xunkong are injected into the agent's system prompt so
+the LLM can reason about 旺衰/冲合/动爻回头生克 from the actual
+cast time.
+
+**RAG**: the system corpus (`docs/base_knowledge/*.md`) is
+auto-bootstrapped on every server start (see [src/app.ts](src/app.ts))
+with a **contentHash cache** so only files whose body changed get
+re-embedded. Default embedder is **智谱 Embedding-3** (2048d,
+OpenAI-compatible endpoint at `open.bigmodel.cn/api/paas/v4`,
+0.5 元/Mtok). Swap with `ORBIT_EMBEDDER=hash` for dependency-free
+local dev.
 
 **Agent layer**: ships a working `default` agent that calls
 `runAnalysisAgent` (currently a thin template wrapper) → RAG-cited
@@ -387,12 +401,12 @@ first-step data.
 field; it can only interpret what's in the ChartResult.
 
 **P2 work** (still TODO, surfaces as `warnings[]` on the chart
-response): 冲合刑害破完整规则, calendar skill (公历→干支自动推算),
-完整用神候选规则, 旺衰量化打分, 伏神/飞神, 化进化退.
+response): 冲合刑害破完整规则, 完整用神候选规则, 旺衰量化打分,
+伏神/飞神, 化进化退.
 
 The 排盘 pipeline's stage-by-stage table of which data is sourced
 externally vs. computed inline is tracked in
-`docs/liuyao/KNOWLEDGE_NEEDED.md` (P0 = 64-hexagram table, now ✅).
+`docs/liuyao/KNOWLEDGE_NEEDED.md` (P0 = 64-hexagram table, ✅).
 
 ---
 

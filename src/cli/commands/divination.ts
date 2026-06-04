@@ -184,10 +184,18 @@ export function registerDivination(program: Command): void {
   rag.command('stats')
     .description('Show RAG index stats')
     .action(async () => {
-      const data = await apiGet<any>('/divination/rag/stats');
-      console.log(`chunks: ${data.chunkCount}`);
-      console.log(`sources: ${data.sourceCount}`);
-      for (const s of data.sources) console.log(`  - ${s}`);
+      // The server exposes /rag/list (not /rag/stats) with the
+      // { totalChunks, totalDocuments, per-scope, sources } shape.
+      const data = await apiGet<any>('/divination/rag/list');
+      console.log(`chunks:     ${data.totalChunks ?? 0}`);
+      console.log(`documents:  ${data.totalDocuments ?? 0}`);
+      if (data.systemChunks != null) console.log(`  system:  ${data.systemChunks}`);
+      if (data.userChunksForRequester != null) console.log(`  user:    ${data.userChunksForRequester}  (yours)`);
+      if (Array.isArray(data.sources)) {
+        for (const s of data.sources) {
+          console.log(`  - ${s.source}  (${s.scope})  ${s.title ? '— ' + s.title : ''}`);
+        }
+      }
     });
 
   rag.command('search <query...>')
@@ -199,9 +207,10 @@ export function registerDivination(program: Command): void {
       if (opts.k) body.k = parseInt(opts.k, 10);
       const results = await apiPost<any[]>('/divination/rag/search', body);
       for (const r of results) {
-        console.log(`${chalk.cyan(r.source)} — ${chalk.bold(r.title)} (${r.score.toFixed(3)})`);
-        const snippet = r.text.length > 200 ? r.text.slice(0, 200) + '…' : r.text;
-        console.log(chalk.gray(`  ${snippet}`));
+        console.log(`${chalk.cyan(r.source)} — ${chalk.bold(r.title || '?')} (${r.score.toFixed(3)})`);
+        // Server returns `snippet` (truncated to 200 chars), not
+        // the full chunk `text`.
+        console.log(chalk.gray(`  ${r.snippet || ''}`));
         console.log();
       }
     });
@@ -240,13 +249,17 @@ export function registerDivination(program: Command): void {
     .description('List documents in the RAG index that you can see (system + your user-scope uploads).')
     .action(async () => {
       const data = await apiGet<any>('/divination/rag/list');
-      const { chunkCount, sourceCount, sources, byScope } = data;
-      console.log(`chunks: ${chalk.cyan(chunkCount)}   sources: ${chalk.cyan(sourceCount)}`);
-      if (byScope) {
-        console.log(`  system: ${byScope.system ?? 0}    user: ${byScope.user ?? 0}`);
+      const { totalChunks, totalDocuments, systemChunks, userChunksForRequester, sources } = data;
+      console.log(`chunks:    ${chalk.cyan(totalChunks ?? 0)}   documents: ${chalk.cyan(totalDocuments ?? 0)}`);
+      if (systemChunks != null || userChunksForRequester != null) {
+        console.log(`  system: ${systemChunks ?? 0}    user: ${userChunksForRequester ?? 0}  (yours)`);
       }
       console.log();
-      for (const s of sources) console.log(`  - ${s}`);
+      if (Array.isArray(sources)) {
+        for (const s of sources) {
+          console.log(`  - ${s.source}  (${s.scope})  ${s.title ? '— ' + s.title : ''}`);
+        }
+      }
     });
 
   rag.command('delete <source>')
