@@ -206,6 +206,8 @@ orbit login --dev
 | `orbit divination cast <b1> ... <b6>` | 只做 6 个 `0/1` bit 的起卦归一，输出 CastResult |
 | `orbit divination chart [bits...]` | 生成完整 ChartResult，并存入 session |
 | `orbit divination chart --yao <v1> ... <v6>` | 用 `6/7/8/9` 爻值排盘，支持动爻 |
+| `orbit divination ask [bits...]` | 完整流程：起卦、排盘、保存、默认调用六爻 Agent 解卦 |
+| `orbit divination ask --yao <v1> ... <v6> -q <question>` | 用动爻输入直接生成 RAG 解卦报告 |
 | `orbit divination brief --session <id>` | 读取结构化 ChartBrief，不调用 LLM |
 | `orbit divination brief --session <id> --json` | 输出完整 JSON brief |
 | `orbit divination analyze <chart.json>` | 读取本地 chart JSON 并直接跑分析 Agent |
@@ -228,6 +230,16 @@ orbit login --dev
 | `--chart-key <key>` | 同一 session 下的卦盘名称，默认 `default` |
 | `--yao` | 把 6 个位置参数解释为 `6/7/8/9` 爻值，而不是 `0/1` bits |
 
+`ask` 额外参数：
+
+| 参数 | 说明 |
+|---|---|
+| `--message <text>` | 起卦后写入 chat 的默认提示词，默认 `请结合卦象分析、解答问题` |
+| `--thinking` | 开启多角度 thinking 分析，成本更高、速度更慢 |
+| `--angles <n>` | thinking 模式分析角度数，服务端限制为 1-5 |
+| `--debug` | 输出 RAG/LLM pipeline timeline，并在正文中保留 `[cite: ...]` 和 `## 引用` |
+| `--json` | 输出原始 JSON |
+
 起卦并存入 session：
 
 ```bash
@@ -249,6 +261,26 @@ orbit divination brief --session sess_offer_demo --json
 
 ```bash
 orbit chat --session sess_offer_demo "请结合卦象分析这个 offer 是否值得接受"
+```
+
+一步完成起卦、排盘和解卦：
+
+```bash
+orbit divination ask --yao 7 8 7 9 7 8 \
+  --datetime "2026-06-04T18:45:00+08:00" \
+  --timezone "Asia/Shanghai" \
+  --question "我是否应该接受这份新工作 offer？" \
+  --session sess_offer_demo_full
+```
+
+默认输出是干净解卦正文，不展示引用块，也会移除正文中的 `[cite: ...]` 标记。需要审计 RAG 命中和 LLM pipeline 时再加 `--debug`：
+
+```bash
+orbit divination ask --yao 7 8 7 9 7 8 \
+  -q "我是否应该接受这份新工作 offer？" \
+  --thinking \
+  --angles 4 \
+  --debug
 ```
 
 查看多阶段 pipeline：
@@ -309,6 +341,28 @@ orbit divination brief --session sess_compare --chart-key second
 orbit chat --agent generic "用一句话介绍 OrbitAgent"
 orbit chat --session sess_offer_demo "刚才这个卦，如果我延后一周再答复呢？"
 echo "请总结这个报告" | orbit chat --agent generic
+```
+
+#### 2.3.1 交互式六爻 CLI 应用
+
+`orbit liuyao` 是一个类似 Claude Code 启动体验的交互式命令行应用。启动后会展示三枚铜钱 logo，然后循环输入问题和 6 个爻值。每次提交都会调用 `/divination/ask`，完成起卦、排盘、RAG 解卦，并返回一个可继续追问的 session。
+
+```bash
+orbit liuyao
+orbit liuyao --thinking --angles 4
+```
+
+交互中输入：
+
+```text
+问题 > 我是否应该接受这份新工作 offer？
+六爻 > 7 8 7 9 7 8
+```
+
+退出：
+
+```text
+/exit
 ```
 
 #### 2.4 RAG 知识库指令
@@ -493,6 +547,33 @@ curl -X POST http://localhost:3000/api/v1/chat \
   }'
 ```
 
+完整流程 API：
+
+```bash
+curl -X POST http://localhost:3000/api/v1/divination/ask \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sessionId": "sess_api_full",
+    "chartKey": "default",
+    "yaoValues": [7,8,7,9,7,8],
+    "datetime": "2026-06-04T18:45:00+08:00",
+    "timezone": "Asia/Shanghai",
+    "question": "我是否应该接受这份新工作 offer？",
+    "message": "请结合卦象分析、解答问题",
+    "thinking": true,
+    "angles": 4
+  }'
+```
+
+默认情况下，`/divination/ask` 的 `content` 是给终端和前端直接展示的干净正文，不包含 `## 引用`，也不显示 `[cite: ...]`。如果请求里传 `debug: true`，`content` 会保留引用信息，并额外返回 `debug.pipeline`、`debug.rag`、`debug.perAngle` 等审计数据。
+
+`/divination/ask` 始终返回 `sessionId`、`chart`、`report`、`brief`、`content`；`debug` 只在 `debug: true` 时返回。服务端会把默认提示词和最终报告写入临时 chat memory，所以之后可以继续追问：
+
+```bash
+orbit chat --session sess_api_full "如果我延后一周再答复，会有什么变化？"
+```
+
 上传私有知识：
 
 ```bash
@@ -518,6 +599,7 @@ curl -X POST http://localhost:3000/api/v1/divination/rag/upload \
 | `POST` | `/auth/login` | 登录获取 JWT |
 | `POST` | `/divination/cast` | 只做 6 bits 起卦归一 |
 | `POST` | `/divination/chart` | 生成完整 ChartResult，并保存到 ChartStore |
+| `POST` | `/divination/ask` | 完整流程：起卦、排盘、保存、默认提示词解卦、写入 chat 临时记忆 |
 | `GET` | `/divination/brief/:sessionId` | 读取结构化 ChartBrief，不调用 LLM |
 | `GET` | `/divination/chart/keys/:sessionId` | 查看当前用户在 session 下的 chartKey |
 | `POST` | `/divination/analyze` | 直接分析 chart 或 session 中的最新 chart |
@@ -797,9 +879,10 @@ CLI 渲染样例（`orbit chat --thinking --debug`）：
 ### P0：文档和可运行基线
 
 - 统一 README、`README.zh.md`、`docs/README.md` 的定位，避免中英文和新旧能力互相矛盾。
-- 给 `/divination/chart`、`/divination/analyze`、`/chat` 增加最小可复制 curl 示例和响应字段说明。
+- 给 `/divination/chart`、`/divination/ask`、`/divination/analyze`、`/chat` 增加最小可复制 curl 示例和响应字段说明。
 - 固化一个 `sess_offer_demo` 端到端验收用例：排盘、brief、RAG、chat debug、报告引用都要可验证。
 - 增加 schema 文档：`ChartResult`、`ChartBrief`、`AnalysisReport`、`RagCitation`。
+- 保持开发顺序：先稳定 API，再补一次性命令行，再做交互式 CLI 应用，最后再接前端工作台。
 
 ### P1：确定性规则补完
 
@@ -836,6 +919,7 @@ CLI 渲染样例（`orbit chat --thinking --debug`）：
 ### P3：产品和工程能力
 
 - 前端工作台：起卦输入、卦盘可视化、brief 检查、报告阅读、引用展开、追问。
+- CLI 应用增强：`orbit liuyao` 支持会话内追问、历史列表、知识库切换、报告导出、配置面板。
 - Admin 控制台：用户、API key、provider、模型成本、知识库、RAG 质量、系统状态。
 - 可观测性：pipeline timeline、LLM token/cost、RAG hit rate、引用覆盖率、失败告警。
 - 部署：Docker Compose、生产环境配置模板、Mongo/Redis 备份、日志轮转、健康探针。

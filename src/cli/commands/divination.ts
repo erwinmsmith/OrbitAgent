@@ -24,6 +24,52 @@ import fs from 'fs';
 import chalk from 'chalk';
 import { apiPost, apiGet, apiDelete } from '../http';
 
+export async function postDivinationAsk(body: any): Promise<any> {
+  try {
+    return await apiPost<any>('/divination/ask', body);
+  } catch (err: any) {
+    if (!isMissingAskRoute(err)) throw err;
+
+    // Backward-compatible fallback for a running server that has not
+    // been restarted since /divination/ask was added. It preserves the
+    // same user-facing flow by calling the old endpoints:
+    //   chart/store -> chat with the default 六爻 prompt.
+    const chartBody = { ...body };
+    delete chartBody.message;
+    delete chartBody.debug;
+    delete chartBody.thinking;
+    delete chartBody.angles;
+    const chart = await apiPost<any>('/divination/chart', chartBody);
+    const chatBody: any = {
+      sessionId: body.sessionId,
+      message: body.message || '请结合卦象分析、解答问题',
+      agentId: body.agentId || 'default',
+      debug: !!body.debug,
+    };
+    if (body.thinking) chatBody.thinking = true;
+    if (Number.isFinite(body.angles)) chatBody.angles = body.angles;
+    const chat = await apiPost<any>('/chat', chatBody);
+    return {
+      sessionId: chat.sessionId || body.sessionId,
+      chartKey: body.chartKey || 'default',
+      message: chatBody.message,
+      thinking: !!body.thinking,
+      angles: body.thinking ? body.angles : undefined,
+      content: chat.content,
+      chart,
+      debug: chat.debug,
+      _fallback: 'server-missing-/divination/ask; used /divination/chart + /chat',
+    };
+  }
+}
+
+function isMissingAskRoute(err: any): boolean {
+  if (err?.response?.status !== 404) return false;
+  const code = err.response.data?.error?.code || '';
+  const message = err.response.data?.error?.message || '';
+  return code === 'RESOURCE_NOT_FOUND' && String(message).includes('/divination/ask');
+}
+
 export function registerDivination(program: Command): void {
   const cmd = new Command('divination')
     .description('六爻 client — coins → cast → chart → analyze, plus RAG search');
@@ -143,6 +189,89 @@ export function registerDivination(program: Command): void {
         console.log(chalk.gray(`Next: orbit chat --session ${sessionId} "帮我分析"`));
         console.log(chalk.gray(`Or:   orbit divination analyze <chart.json>  (for a stand-alone report)`));
       } catch (err: any) { console.error(chalk.red(`✗ ${err.message}`)); process.exit(1); }
+    });
+
+  cmd.command('ask [bits...]')
+    .description('One-shot full flow: cast/chart/store, then run the default 六爻 agent analysis with RAG. Positional args are 6 × 0/1 by default; pass --yao for 6/7/8/9 moving-line input.')
+    .option('-q, --question <q>', 'Question text')
+    .option('--question-type <t>', 'Override question type (e.g. 求财, 求事业)')
+    .option('--day-stem <s>', '日干 (e.g. 甲) — overrides the auto-derived value')
+    .option('--day-branch <b>', '日支 (e.g. 子) — overrides the auto-derived value')
+    .option('--month-branch <b>', '月支 (e.g. 寅) — needed for 月破 + 旺衰')
+    .option('--datetime <iso>', 'ISO-8601 datetime string. Defaults to "now" on the server if omitted.')
+    .option('--timezone <tz>', 'IANA timezone for the calendar skill (e.g. Asia/Shanghai).')
+    .option('-s, --session <id>', 'Session id for storing the chart and chat turn (auto-generated if omitted)')
+    .option('--chart-key <k>', 'Logical name for this chart within the session (default: "default")', 'default')
+    .option('--yao', 'Interpret positional args as 6/7/8/9 爻值 instead of 0/1 bits.', false)
+    .option('--message <text>', 'Chat prompt sent after charting', '请结合卦象分析、解答问题')
+    .option('--thinking', 'Enable multi-angle thinking mode (slower, more thorough, more tokens).', false)
+    .option('--angles <n>', 'Number of independent angles in --thinking mode. Clamped to 1–5, default 3.', (v) => parseInt(v, 10))
+    .option('--debug', 'Include and render the analysis pipeline timeline.', false)
+    .option('--json', 'Print raw JSON response instead of the formatted report.', false)
+    .action(async (bits: string[] | undefined, opts) => {
+      bits = bits ?? [];
+      if (bits.length === 0) {
+        console.error(chalk.red(
+          `✗ missing 6 positional args.\n` +
+          `  Examples:\n` +
+          `    orbit divination ask --yao 7 8 7 9 7 8 -q "我是否应该接受 offer？"\n` +
+          `    orbit divination ask 1 1 1 1 1 1 -q "这件事能成吗？"\n`,
+        ));
+        process.exit(2);
+      }
+      const sessionId = opts.session || `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const body: any = {
+        sessionId,
+        chartKey: opts.chartKey,
+        message: opts.message,
+        debug: !!opts.debug,
+      };
+      if (opts.yao) body.yaoValues = parseSixYao(bits);
+      else body.bits = parseSixBits(bits);
+      if (opts.question) body.question = opts.question;
+      if (opts.questionType) body.questionType = opts.questionType;
+      if (opts.dayStem) body.dayStem = opts.dayStem;
+      if (opts.dayBranch) body.dayBranch = opts.dayBranch;
+      if (opts.monthBranch) body.monthBranch = opts.monthBranch;
+      if (opts.datetime) body.datetime = opts.datetime;
+      if (opts.timezone) body.timezone = opts.timezone;
+      if (opts.thinking) body.thinking = true;
+      if (Number.isFinite(opts.angles)) body.angles = opts.angles;
+
+      try {
+        const data = await postDivinationAsk(body);
+        if (opts.json) {
+          console.log(JSON.stringify(data, null, 2));
+          return;
+        }
+        if (data._fallback) {
+          console.log(chalk.yellow('⚠ server does not expose /divination/ask yet; used chart → chat fallback. Restart npm run dev to use the new API directly.'));
+        }
+        const chart = data.chart || {};
+        console.log(chalk.green('✓ Full divination flow completed.'));
+        console.log(`  sessionId: ${chalk.cyan(data.sessionId)}`);
+        console.log(`  chartKey:   ${chalk.cyan(data.chartKey)}`);
+        console.log(`  prompt:     ${chalk.gray(data.message)}`);
+        if (data.thinking) {
+          console.log(`  thinking:   ${chalk.cyan(`on (${data.angles || 3} angles)`)}`);
+        }
+        if (chart.time?.yearStem) {
+          console.log(`  ${chalk.gray('time:')}      ${chalk.cyan(`${chart.time.yearStem}${chart.time.yearBranch}年 / ${chart.time.monthStem}${chart.time.monthBranch}月 / ${chart.time.dayStem}${chart.time.dayBranch}日 / ${chart.time.hourStem}${chart.time.hourBranch}时`)}`);
+        }
+        console.log(`  palace:    ${chalk.cyan(`${chart.originalHexagram?.palace ?? '?'}宫 · ${chart.originalHexagram?.palaceType ?? '?'} · ${chart.originalHexagram?.element ?? '?'}`)}`);
+        console.log(`  moving:    ${chalk.cyan((chart.movingLines || []).length ? chart.movingLines.join(',') : 'none')}`);
+        console.log();
+        console.log(`  ${chalk.bold('本卦')} ${chart.originalHexagram?.fullName ?? chart.originalHexagram?.name ?? '?'}` +
+                    `     ${chalk.bold('变卦')} ${chalk.cyan(chart.changedHexagram?.fullName ?? chart.changedHexagram?.name ?? '?')}`);
+        renderHexagramPair(chart);
+        console.log();
+        console.log(data.content || '(no analysis content)');
+        if (opts.debug && data.debug) renderPipelineTimeline(data.debug);
+        console.log(chalk.gray(`\nContinue: orbit chat --session ${data.sessionId} "继续追问..."`));
+      } catch (err: any) {
+        console.error(chalk.red(`✗ ${err.message}`));
+        process.exit(1);
+      }
     });
 
   cmd.command('analyze <file>')

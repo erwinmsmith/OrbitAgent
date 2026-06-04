@@ -11,6 +11,8 @@
  *   POST /cast                  — 6 raw bits → CastResult
  *   POST /chart                 — full chart; also PERSISTS to ChartStore
  *                                 under (userId, sessionId, chartKey)
+ *   POST /ask                   — complete flow: chart + store + default
+ *                                 六爻 RAG analysis + chat-memory turn
  *   POST /analyze               — accepts {chart: ...} OR {sessionId}
  *                                 to read from the store (latter is what
  *                                 the agent uses). Runs the full
@@ -47,6 +49,7 @@ import { castSkill } from '../liuyao/skills/castSkill';
 import { assembleChart, type AssembleInput } from '../liuyao/skills/chartAssembler';
 import { runAnalysisAgent } from '../liuyao/agent/analysisAgent';
 import { buildChartBrief } from '../liuyao/agent/chartBrief';
+import type { AnalysisReport } from '../liuyao/types/agent';
 import {
   search, ragStats, ingestDocument, deleteDocument, bootstrapSystemKnowledge,
   resolveEmbedder,
@@ -54,10 +57,14 @@ import {
 import {
   saveChart, getChart, listChartKeys, getLatestChart,
 } from '../core/memory/ChartStore';
+import { getTemporaryMemory } from '../core/memory/TemporaryMemory';
+import { getAgent } from '../core/agents/AgentLoader';
 import { HTTP_STATUS } from '../constants';
 import { logger } from '../utils/logger';
+import { generateSessionId } from '../utils/helpers';
 
 const router = Router();
+const DEFAULT_DIVINATION_CHAT_PROMPT = '请结合卦象分析、解答问题';
 
 router.use(authMiddleware(true));
 
@@ -71,6 +78,111 @@ function userIdOrThrow(req: Request): string {
 
 function isAdmin(req: Request): boolean {
   return !!req.user?.isAdmin;
+}
+
+function normalizeSessionId(sessionId: unknown): string {
+  if (typeof sessionId !== 'string' || !sessionId.trim()) return generateSessionId();
+  return sessionId.trim().replace(/\s+/g, '_');
+}
+
+function buildAssembleInput(body: any): AssembleInput {
+  return {
+    question: body.question,
+    questionType: body.questionType,
+    bits: body.bits,
+    yaoValues: body.yaoValues,
+    dayStem: body.dayStem,
+    dayBranch: body.dayBranch,
+    monthBranch: body.monthBranch,
+    hourStem: body.hourStem,
+    hourBranch: body.hourBranch,
+    datetime: body.datetime,
+    timezone: body.timezone,
+  };
+}
+
+function validateCastInput(input: AssembleInput): void {
+  if (!Array.isArray(input.bits) && !Array.isArray(input.yaoValues)) {
+    throw new AppError('VALIDATION_ERROR',
+      'either `bits` (6 × 0/1) or `yaoValues` (6 × 6/7/8/9) is required',
+      HTTP_STATUS.BAD_REQUEST);
+  }
+  if (Array.isArray(input.bits) && Array.isArray(input.yaoValues)) {
+    throw new AppError('VALIDATION_ERROR',
+      'pass either `bits` OR `yaoValues`, not both',
+      HTTP_STATUS.BAD_REQUEST);
+  }
+}
+
+function parseAnalysisOptions(body: any): { debug: boolean; thinking: boolean; angles: number } {
+  const debug = body.debug === true || body.debug === 'true';
+  const thinking = body.thinking === true || body.thinking === 'true';
+  const rawAngles = Number(body.angles);
+  const angles = Number.isFinite(rawAngles)
+    ? Math.max(1, Math.min(5, Math.floor(rawAngles)))
+    : 3;
+  return { debug, thinking, angles };
+}
+
+function renderAnalysisReport(report: AnalysisReport, options: { showCitations: boolean }): string {
+  if (
+    looksLikeCompleteMarkdownReport(report.synthesis) &&
+    (!report.summary || report.summary.includes('未生成概要段'))
+  ) {
+    return appendReportExtras(report.synthesis.trim(), report, options);
+  }
+
+  const sections: Array<[keyof AnalysisReport, string]> = [
+    ['summary', '一、卦象概要'],
+    ['originalHexagramInterpretation', '二、本卦解释'],
+    ['changedHexagramInterpretation', '三、变卦解释'],
+    ['movingLineAnalysis', '四、动爻分析'],
+    ['shiYingAnalysis', '五、世应关系'],
+    ['yongshenAnalysis', '六、用神分析'],
+    ['strengthAndRelations', '七、旺衰、空破与冲合'],
+    ['synthesis', '八、综合判断'],
+  ];
+  const out: string[] = [];
+  for (const [key, label] of sections) {
+    const value = report[key];
+    if (typeof value === 'string' && value.trim()) {
+      out.push(`## ${label}\n\n${formatCitationDisplay(value.trim(), options)}`);
+    }
+  }
+  if (report.uncertainties?.length) {
+    out.push(`## 九、不确定性与需要补充的信息\n\n${report.uncertainties.map((u) => `- ${u}`).join('\n')}`);
+  }
+  if (options.showCitations && report.citations?.length) {
+    out.push(`## 引用\n\n${report.citations.map((c) => `- ${c.source} (${c.score.toFixed(3)}): ${c.snippet}`).join('\n')}`);
+  }
+  return formatCitationDisplay(out.join('\n\n').trim(), options);
+}
+
+function looksLikeCompleteMarkdownReport(value: string | undefined): boolean {
+  if (!value) return false;
+  return value.includes('综合分析报告') ||
+    value.includes('### ①') ||
+    value.includes('#### ①') ||
+    value.includes('分析角度：');
+}
+
+function appendReportExtras(markdown: string, report: AnalysisReport, options: { showCitations: boolean }): string {
+  const out = [formatCitationDisplay(markdown, options)];
+  if (report.uncertainties?.length && !markdown.includes('不确定性')) {
+    out.push(`## 不确定性与需要补充的信息\n\n${report.uncertainties.map((u) => `- ${u}`).join('\n')}`);
+  }
+  if (options.showCitations && report.citations?.length && !markdown.includes('## 引用')) {
+    out.push(`## 引用\n\n${report.citations.map((c) => `- ${c.source} (${c.score.toFixed(3)}): ${c.snippet}`).join('\n')}`);
+  }
+  return out.join('\n\n').trim();
+}
+
+function formatCitationDisplay(markdown: string, options: { showCitations: boolean }): string {
+  if (options.showCitations) return markdown;
+  return markdown
+    .replace(/\s*\[cite:[^\]]+\]/g, '')
+    .replace(/\n{0,2}#{1,6}\s*引用[\s\S]*$/m, '')
+    .trim();
 }
 
 // ─── POST /cast ───────────────────────────────────────────────────────
@@ -99,32 +211,11 @@ router.post('/chart', asyncHandler(async (req: Request, res: Response) => {
       'sessionId is required — the chart is persisted under it so the liuyao agent can read it later',
       HTTP_STATUS.BAD_REQUEST);
   }
-  const input: AssembleInput = {
-    question: body.question,
-    questionType: body.questionType,
-    bits: body.bits,
-    yaoValues: body.yaoValues,
-    dayStem: body.dayStem,
-    dayBranch: body.dayBranch,
-    monthBranch: body.monthBranch,
-    hourStem: body.hourStem,
-    hourBranch: body.hourBranch,
-    datetime: body.datetime,
-    timezone: body.timezone,
-  };
+  const input = buildAssembleInput(body);
   // Accept either bits (6 × 0/1, static) or yaoValues (6 × 6/7/8/9,
   // supports moving lines). The castSkill will throw a clear error
   // if neither is provided or if both are.
-  if (!Array.isArray(input.bits) && !Array.isArray(input.yaoValues)) {
-    throw new AppError('VALIDATION_ERROR',
-      'either `bits` (6 × 0/1) or `yaoValues` (6 × 6/7/8/9) is required',
-      HTTP_STATUS.BAD_REQUEST);
-  }
-  if (Array.isArray(input.bits) && Array.isArray(input.yaoValues)) {
-    throw new AppError('VALIDATION_ERROR',
-      'pass either `bits` OR `yaoValues`, not both',
-      HTTP_STATUS.BAD_REQUEST);
-  }
+  validateCastInput(input);
   const chart = assembleChart(input);
   const chartKey = body.chartKey || 'default';
   const stored = await saveChart(userId, sessionId, chart, chartKey);
@@ -136,6 +227,74 @@ router.post('/chart', asyncHandler(async (req: Request, res: Response) => {
       chartKey,
       expiresAt: stored.expiresAt,
       _note: 'Stored in ChartStore (Mongo); the liuyao agent will read it on /chat.',
+    },
+  });
+}));
+
+// ─── POST /ask ────────────────────────────────────────────────────────
+// One-shot full flow:
+//   起卦输入 → assembleChart → saveChart → runAnalysisAgent (same RAG
+//   pipeline used by divination.analyze/tool) → persist a chat-like
+//   user/assistant pair in temporary memory for later `orbit chat --session`.
+router.post('/ask', asyncHandler(async (req: Request, res: Response) => {
+  const userId = userIdOrThrow(req);
+  const body = req.body || {};
+  const sessionId = normalizeSessionId(body.sessionId);
+  const chartKey = body.chartKey || 'default';
+  const message = typeof body.message === 'string' && body.message.trim()
+    ? body.message.trim()
+    : DEFAULT_DIVINATION_CHAT_PROMPT;
+  const { debug, thinking, angles } = parseAnalysisOptions(body);
+  const input = buildAssembleInput(body);
+  validateCastInput(input);
+
+  const chart = assembleChart(input);
+  const stored = await saveChart(userId, sessionId, chart, chartKey);
+  const agent = getAgent(body.agentId || 'default');
+  const analysis = await runAnalysisAgent(chart, userId, isAdmin(req), {
+    model: body.model || agent?.model,
+    debug,
+    thinking,
+    angles,
+  });
+  const content = renderAnalysisReport(analysis.report, { showCitations: debug });
+
+  // Store this as a normal chat turn so the caller can immediately
+  // continue with `orbit chat --session <id> ...`.
+  const tempMemory = getTemporaryMemory();
+  await tempMemory.addMessage(sessionId, {
+    userId,
+    sessionId,
+    role: 'user',
+    content: message,
+    modelId: body.model || agent?.model,
+    modelProvider: body.provider || agent?.provider,
+  });
+  await tempMemory.addMessage(sessionId, {
+    userId,
+    sessionId,
+    role: 'assistant',
+    content,
+    modelId: analysis.debug?.synthesis?.model || body.model || agent?.model,
+    modelProvider: analysis.debug?.synthesis?.provider || body.provider || agent?.provider,
+  });
+
+  res.json({
+    success: true,
+    data: {
+      sessionId,
+      chartKey,
+      expiresAt: stored.expiresAt,
+      message,
+      agentId: agent?.id || body.agentId || 'default',
+      thinking,
+      angles: thinking ? angles : undefined,
+      content,
+      chart,
+      report: analysis.report,
+      brief: analysis.brief,
+      debug: debug ? analysis.debug : undefined,
+      _note: 'Full flow completed: chart stored, RAG analysis generated, and a chat turn was added to temporary memory.',
     },
   });
 }));
