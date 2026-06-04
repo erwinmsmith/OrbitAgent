@@ -380,11 +380,16 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
       toolCallLog.push({ name: call.name, ok, error: errorMsg });
 
       // Append the assistant's tool-call request to the conversation so
-      // the model sees its own choice on the next round.
+      // the model sees its own choice on the next round. We carry
+      // `providerExtras` (e.g. DeepSeek v4 reasoning_content) through
+      // verbatim — without it the follow-up call would 500 with
+      // "reasoning_content in the thinking mode must be passed back
+      // to the API".
       llmMessages.push({
         role: 'assistant',
         content: response.content || '',
         toolCalls: [call],
+        providerExtras: response.providerExtras,
       } as any);
       // Append the tool result. Different LLM SDKs use different field
       // names; our `LLMMessage` keeps it neutral as `toolCallId`+`name`+`content`.

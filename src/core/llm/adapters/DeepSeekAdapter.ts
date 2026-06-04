@@ -6,11 +6,20 @@ import { logger } from '../../../utils/logger';
  * Convert our neutral LLMMessage[] to OpenAI/DeepSeek chat-completions
  * message format, including the assistant `tool_calls` field and the
  * `tool` role (used to return a tool's output back to the model).
+ *
+ * DeepSeek-v4 reasoning mode requires `reasoning_content` from each
+ * prior assistant turn to be passed back, or the API returns
+ * "reasoning_content in the thinking mode must be passed back to the
+ * API". The chat loop stores that field in `providerExtras`; we
+ * surface it here as the `reasoning_content` field on the assistant
+ * message. (The exact key lives in `providerExtras.reasoningContent`
+ * to stay neutral across providers — DeepSeek's on-the-wire key
+ * is `reasoning_content`.)
  */
 function toOpenAIMessages(messages: LLMMessage[]): any[] {
   return messages.map((msg) => {
     if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
-      return {
+      const out: any = {
         role: 'assistant',
         content: msg.content || null,
         tool_calls: msg.toolCalls.map((tc) => ({
@@ -19,6 +28,15 @@ function toOpenAIMessages(messages: LLMMessage[]): any[] {
           function: { name: tc.name, arguments: JSON.stringify(tc.input ?? {}) },
         })),
       };
+      // DeepSeek v4 reasoning mode: round-trip reasoning_content
+      // from the previous assistant turn. The chat loop stores it
+      // under providerExtras; for non-reasoning turns this is just
+      // undefined and the field is omitted.
+      const rc = msg.providerExtras?.reasoningContent;
+      if (typeof rc === 'string' && rc.length > 0) {
+        out.reasoning_content = rc;
+      }
+      return out;
     }
     if (msg.role === 'tool') {
       return { role: 'tool', tool_call_id: msg.toolCallId ?? '', content: msg.content };
@@ -107,6 +125,16 @@ export class DeepSeekAdapter implements ILLMAdapter {
           name: tc.function.name,
           input: JSON.parse(tc.function.arguments),
         })),
+        // DeepSeek v4 reasoning-mode bookkeeping: the model emits
+        // `reasoning_content` alongside `content`; we surface it
+        // under providerExtras so the chat loop can round-trip it
+        // on the next request (see toOpenAIMessages above).
+        providerExtras: (() => {
+          const rc = choice.message.reasoning_content;
+          return typeof rc === 'string' && rc.length > 0
+            ? { reasoningContent: rc }
+            : undefined;
+        })(),
         raw: data,
       };
     } catch (error: any) {

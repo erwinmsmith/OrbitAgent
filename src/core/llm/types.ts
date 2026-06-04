@@ -12,6 +12,18 @@ export interface LLMMessage {
   toolCalls?: ToolCall[];
   /** Matches the tool_calls[].id the response is replying to (tool turn). */
   toolCallId?: string;
+  /**
+   * Provider-specific opaque blob that must be passed back on
+   * follow-up calls. The DeepSeek v4 reasoning mode requires
+   * `reasoning_content` from the previous assistant turn to be
+   * included in the next request, or the API returns
+   * "reasoning_content in the thinking mode must be passed back to
+   * the API". Other providers use this slot for their own
+   * bookkeeping (e.g. Anthropic's signature blocks). The chat
+   * loop appends whatever the adapter emits; the adapter knows
+   * what shape to put back on the wire.
+   */
+  providerExtras?: Record<string, unknown>;
 }
 
 // Temporary message for Redis storage
@@ -70,6 +82,15 @@ export interface ChatResponse {
     cacheHitTokens?: number;
   };
   toolCalls?: ToolCall[];
+  /**
+   * The adapter's "extras" — provider-specific bookkeeping the chat
+   * loop must round-trip to the adapter on the next call. For
+   * DeepSeek this holds `reasoning_content` from the v4 thinking
+   * mode; without it the next /chat call fails with
+   * "reasoning_content in the thinking mode must be passed back to
+   * the API". Other adapters can set this to whatever they need.
+   */
+  providerExtras?: Record<string, unknown>;
   raw?: any;
 }
 
