@@ -31,8 +31,8 @@ export function registerDivination(program: Command): void {
       } catch (err: any) { console.error(chalk.red(`✗ ${err.message}`)); process.exit(1); }
     });
 
-  cmd.command('chart <bits...>')
-    .description('Run the full chart assembler AND persist it to the session store. --session is REQUIRED so the agent can read it back later. By default the positional args are 6 × 0/1 (static yin/yang). Pass --yao to switch to 6 × 6/7/8/9 (supports moving lines 6 and 9). If you don\'t pass --day-stem / --day-branch, they are auto-derived from --datetime (or "now" if omitted) using lunar-typescript.')
+  cmd.command('chart [bits...]')
+    .description('Run the full chart assembler AND persist it to the session store. Positional args are 6 × 0/1 (static yin/yang) by default. Pass --yao to switch to 6 × 6/7/8/9 (supports moving lines 6 and 9). If you don\'t pass --day-stem / --day-branch, they are auto-derived from --datetime (or "now" if omitted) using lunar-typescript.')
     .option('-q, --question <q>', 'Question text (used for 用神 + analysis)')
     .option('--question-type <t>', 'Override question type (e.g. 求财, 求事业)')
     .option('--day-stem <s>', '日干 (e.g. 甲) — overrides the auto-derived value')
@@ -43,7 +43,17 @@ export function registerDivination(program: Command): void {
     .option('-s, --session <id>', 'Session id under which to store the chart (auto-generated if omitted; pass the same value to `orbit chat` later)')
     .option('--chart-key <k>', 'Logical name for this chart within the session (default: "default")', 'default')
     .option('--yao', 'Interpret the 6 positional args as 6/7/8/9 爻值 (with moving lines) instead of 0/1 bits.', false)
-    .action(async (bits: string[], opts) => {
+    .action(async (bits: string[] | undefined, opts) => {
+      bits = bits ?? [];
+      if (bits.length === 0) {
+        console.error(chalk.red(
+          `✗ missing 6 positional args.\n` +
+          `  Examples:\n` +
+          `    orbit divination chart 1 1 1 1 1 1 ...        # static yin/yang (bits)\n` +
+          `    orbit divination chart --yao 7 7 7 7 9 7 ...  # raw 爻值 (6/7/8/9, supports moving lines)\n`,
+        ));
+        process.exit(2);
+      }
       const sessionId = opts.session || `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const body: any = { sessionId, chartKey: opts.chartKey };
       if (opts.yao) {
@@ -263,13 +273,22 @@ export function registerDivination(program: Command): void {
     });
 
   rag.command('delete <source>')
-    .description('Delete a document from the RAG index. You can delete your own user-scope uploads; admins can delete any source.')
+    .description('Delete a document from the RAG index. You can delete your own user-scope uploads; admins can delete any source. Run `orbit divination rag list` to see exact source strings.')
     .action(async (source: string) => {
+      // Sanity: don't let the user accidentally paste the README's
+      // example placeholders (with `...`) into the live command.
+      if (source.includes('...') || source === 'user:.../test.md' || source === 'docs/base_knowledge/...') {
+        console.error(chalk.red(
+          `✗ "${source}" looks like a placeholder. Run \`orbit divination rag list\` to see real source strings, then paste the one you want.`,
+        ));
+        process.exit(2);
+      }
       try {
         await apiDelete(`/divination/rag/${encodeURIComponent(source)}`);
         console.log(chalk.green(`✓ deleted ${source}`));
       } catch (err: any) {
         console.error(chalk.red(`✗ ${err.message}`));
+        console.error(chalk.gray(`  (Run \`orbit divination rag list\` to see what's actually in the index.)`));
         process.exit(1);
       }
     });
