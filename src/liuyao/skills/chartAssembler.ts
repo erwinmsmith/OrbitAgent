@@ -10,6 +10,7 @@ import { hexagramSkill } from './hexagramSkill';
 import { palaceSkill } from './palaceSkill';
 import { najiaSkill } from './najiaSkill';
 import { sixRelativeSkill } from './sixRelativeSkill';
+import { relativeOf } from '../constants/sixRelatives';
 import { sixGodSkill } from './sixGodSkill';
 import { voidSkill } from './voidSkill';
 import { branchRelationSkill } from './branchRelationSkill';
@@ -23,7 +24,7 @@ import type {
   StrengthSkillOutput,
 } from '../types/skill';
 import type { ChartResult, ChartLine, HexagramMeta } from '../types/chart';
-import type { QuestionType, EarthlyBranch, HeavenlyStem, LinePosition, WuXing, SixRelative, SixGod } from '../types/basic';
+import type { QuestionType, EarthlyBranch, HeavenlyStem, LinePosition, WuXing, SixRelative, SixGod, YinYangBit } from '../types/basic';
 import { flipYao, isMoving, yaoYinYang, LINE_POSITIONS } from '../constants/yao';
 import { TRIGRAM_BITS, BITS_TO_TRIGRAM } from '../constants/trigrams';
 import type { LinePosition as LP } from '../types/basic';
@@ -130,6 +131,34 @@ export function assembleChart(input: AssembleInput): ChartResult {
     }
   }
 
+  // Step 9.5 — 变卦 纳甲 + 六亲. After all moving lines flip, the
+  // 变卦 has its own (upper, lower) trigram pair; re-running najiaSkill
+  // on that pair gives the 变卦's stem/branch/element per line. The
+  // 变卦's sixRelative is computed against the SAME palaceElement
+  // (liuyao convention — 变爻's 六亲 uses 本卦宫's element, not the
+  // 变卦's own palace's element). sixGod is unchanged because it
+  // depends on dayStem only. For static charts (no moving lines),
+  // the post-mutation bits match the original so the changed* fields
+  // end up equal to the original.
+  let changedLinesNajia: NaJiaSkillOutput['lines'] | null = null;
+  if (hex.originalLines && hex.originalHexagram) {
+    const changedBits: YinYangBit[] = hex.originalLines.map((b, i) => {
+      const pos = (i + 1) as LinePosition;
+      if (hex.movingLines.includes(pos)) return b === 1 ? 0 : 1;
+      return b;
+    });
+    const upperBits = changedBits.slice(3).join('');
+    const lowerBits = changedBits.slice(0, 3).join('');
+    const newUpper = BITS_TO_TRIGRAM[upperBits];
+    const newLower = BITS_TO_TRIGRAM[lowerBits];
+    if (newUpper && newLower) {
+      changedLinesNajia = najiaSkill({
+        lowerTrigram: newLower,
+        upperTrigram: newUpper,
+      }).lines;
+    }
+  }
+
   // Build the 6 ChartLine objects (positions 1..6).
   const lines = ((): ChartLine[] => {
     const out: ChartLine[] = [];
@@ -141,6 +170,10 @@ export function assembleChart(input: AssembleInput): ChartResult {
       const changedYinYang = moving ? yaoYinYang(flipYao(rawValue)) : yinyang;
       const isShi = position === shi;
       const isYing = position === ying;
+      // 变卦 纳甲 from the post-mutation bit pattern (defaults to
+      // the original 纳甲 if we couldn't compute the post-mutation
+      // trigram pair).
+      const cn = changedLinesNajia?.[i];
       const line: ChartLine = {
         position,
         rawValue,
@@ -155,6 +188,14 @@ export function assembleChart(input: AssembleInput): ChartResult {
         isShi,
         isYing,
         void: emptyLines.includes(position),
+        // 变卦 fields — same shape, recomputed against the post-mutation
+        // 纳甲. sixRel uses the original palaceElement (liuyao rule).
+        changedStem: cn?.stem as any,
+        changedBranch: cn?.branch as any,
+        changedElement: cn?.element as any,
+        changedSixRelative: palace && cn
+          ? relativeOf(palace.palaceElement, cn.element)
+          : undefined,
       };
       out.push(line);
     }

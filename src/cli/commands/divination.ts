@@ -79,12 +79,33 @@ export function registerDivination(program: Command): void {
         console.log(`  ${chalk.bold('本卦')} ${data.originalHexagram?.fullName ?? data.originalHexagram?.name ?? '?'}` +
                     `     ${chalk.bold('变卦')} ${chalk.cyan(data.changedHexagram?.fullName ?? data.changedHexagram?.name ?? '?')}`);
         renderHexagramPair(data);
-        // Line decorations (branch, sixRelative, sixGod).
+        // Line decorations (branch, sixRelative, sixGod). Show both
+        // 本卦 and 变卦 columns for clarity when a chart has moving
+        // lines. The 变卦's sixGod is intentionally the same as the
+        // 本卦's (六神 only depends on day stem), so we only print
+        // it once per line.
         if (Array.isArray(data.lines)) {
-          console.log();
-          console.log(chalk.gray('  Lines (pos: branch sixRelative sixGod):'));
-          for (const l of data.lines) {
-            console.log(chalk.gray(`    ${l.position}: ${l.branch} ${l.sixRelative} 临${l.sixGod}${l.void ? ' [旬空]' : ''}`));
+          const hasMoving = Array.isArray(data.movingLines) && data.movingLines.length > 0;
+          if (hasMoving) {
+            console.log();
+            console.log(chalk.gray('  Lines (pos: branch sixRelative sixGod | 变 branch 变 sixRel):'));
+            for (const l of data.lines) {
+              const voidMark = l.void ? ' [旬空]' : '';
+              const movingMark = l.moving ? chalk.yellow(' 动') : '';
+              const changedRel = l.changedSixRelative
+                ? `${l.changedBranch} ${l.changedSixRelative}`
+                : chalk.gray('—');
+              console.log(chalk.gray(
+                `    ${l.position}: ${l.branch} ${l.sixRelative} 临${l.sixGod}${voidMark}${movingMark}` +
+                chalk.reset(`  |  变: ${changedRel}`),
+              ));
+            }
+          } else {
+            console.log();
+            console.log(chalk.gray('  Lines (pos: branch sixRelative sixGod):'));
+            for (const l of data.lines) {
+              console.log(chalk.gray(`    ${l.position}: ${l.branch} ${l.sixRelative} 临${l.sixGod}${l.void ? ' [旬空]' : ''}`));
+            }
           }
         }
         console.log();

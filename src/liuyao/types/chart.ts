@@ -31,6 +31,20 @@ export interface ChartLine {
   void?: boolean;              // is this line in xunkong (旬空)?
   monthBroken?: boolean;       // is this line broken by the month (月破)?
   dayBroken?: boolean;         // is this line broken by the day (日破)?
+  /** The 变卦's view of this line — same 纳甲, recomputed for the
+   *  post-mutation trigram pair (i.e. flipping each moving line's
+   *  bit and re-running the trigram 纳甲 table). For static lines
+   *  these are identical to the original `stem`/`branch`/`element`.
+   *  `changedSixRelative` uses the SAME `palaceElement` as the
+   *  original (liuyao convention: the 变卦's sixRel is judged against
+   *  the 本卦宫's element, not the 变卦's own palace's element).
+   *  `changedSixGod` is intentionally NOT exposed because sixGod
+   *  only depends on the day stem, not the hexagram — so the 变卦
+   *  has the same gods as the 本卦. */
+  changedStem?: HeavenlyStem;
+  changedBranch?: EarthlyBranch;
+  changedElement?: WuXing;
+  changedSixRelative?: SixRelative;
   strength?: {
     labels: string[];          // human-readable tags: 旺/相/休/囚/死/得月生/...
     score?: number;            // optional numeric strength
