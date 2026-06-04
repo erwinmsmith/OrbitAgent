@@ -1,15 +1,20 @@
 # OrbitAgent
 
-**六爻纳甲 (Six-Yang I-Ching) 起卦 + LLM 解读** 的多用户 AI 后端。
+**Liuyeo Najia (Six-Yang I-Ching) hexagram casting + LLM interpretation**,
+shipped as a multi-user AI backend.
 
-程序层做确定性排盘 (本卦/变卦、纳甲、六亲、六神、世应、旬空),LLM 层
-负责把排盘结果组织成可读的分析报告并和用户对话。所有规则表 (64 卦、
-八宫纳甲、六亲六神、旬空、日干支) 全部硬编码,LLM 不会"算",只会
-"说清楚"。
+The engine layer does deterministic chart assembly (本卦/变卦 —
+original/changed hexagrams, 纳甲 — stem-branch assignment, 六亲 —
+six relatives, 六神 — six gods, 世应 — world/response, 旬空 —
+xunkong/void); the LLM layer turns the assembled chart into a
+readable analysis report and converses with the user. Every rule
+table (the 64 hexagrams, the 8-palace 纳甲 assignment, 六亲/六神
+mapping, 旬空, day stem-branch) is hard-coded — the LLM doesn't
+"compute," it only "explains."
 
 ```
                 ┌─────────────────────────────────────┐
-                │  Deterministic 排盘 engine          │
+                │  Deterministic chart engine         │
                 │  ────────────────────────────────  │
    6 bits ──►   │  cast → hexagram → palace → 纳甲   │  ──►  ChartResult
    or 6 yao     │  → sixRel → sixGod → void …        │      (stored in Mongo)
@@ -22,27 +27,27 @@
                 │  ────────────────────────────────  │
                 │  • reads ChartResult fields only   │
                 │  • cites RAG chunks (Mongo + search)│
-                │  • never recomputes any 排盘 field  │
+                │  • never recomputes any chart field│
                 │  • produces 6/9-section report      │
                 └─────────────────────────────────────┘
 ```
 
-Core rule (from `design.md`): **程序负责"算准",Agent 负责"说清楚"**。
-The LLM is forbidden from recomputing any chart field; if a field is
-missing it must say so.
+Core rule (from `design.md`): **the engine computes, the agent
+explains**. The LLM is forbidden from recomputing any chart field;
+if a field is missing it must say so.
 
 ---
 
-## 六爻 — what's actually in the box
+## The Liuyeo subsystem — what's actually in the box
 
-The 排盘 engine ([src/liuyao/](src/liuyao/)) ships with the full
-first-step deterministic pipeline:
+The chart assembly engine ([src/liuyao/](src/liuyao/)) ships with the
+full first-step deterministic pipeline:
 
-- **64 卦表** — `docs/base_knowledge/64卦数据.json` (卦辞, 爻辞, 世应,
-  符号, 八宫归属) is loaded at module init and re-keyed into
-  `HEXAGRAMS_BY_BITS` / `HEXAGRAMS_BY_NAME` / `HEXAGRAMS_BY_ID`. Every
-  hexagram's palace, palaceType (本宫/一世/.../归魂), and element are
-  derived from the (upper, lower) trigram pair.
+- **64-hexagram table** — `docs/base_knowledge/64卦数据.json` (卦辞,
+  爻辞, 世应, 符号, 八宫归属) is loaded at module init and re-keyed
+  into `HEXAGRAMS_BY_BITS` / `HEXAGRAMS_BY_NAME` / `HEXAGRAMS_BY_ID`.
+  Every hexagram's palace, palaceType (本宫/一世/.../归魂), and element
+  are derived from the (upper, lower) trigram pair.
 - **13 skills** orchestrated by `chartAssembler.ts` in fixed order:
   `cast → hexagram → palace → najia → sixRelative → sixGod → void →
    branchRelation → transformation → yongshen → strength → fushen`
@@ -73,8 +78,8 @@ $ orbit divination chart 1 1 1 1 1 1 \
   orig: 乾   changed: 乾   palace: 乾宫 · 本宫 · 金
   shi/ying: 6/3   moving: none
 
-$ orbit chat --session sess_demo "这次求财能成吗?"
-完整 6 段报告 + RAG 引用
+$ orbit chat --session sess_demo "Will this investment pay off?"
+Full 6-section report + RAG citations
 ```
 
 The chart is persisted in `ChartStore` (Mongo, 24h TTL,
@@ -102,11 +107,11 @@ The bits/yao encoding is documented in the CLI's `--help` and in
 
 ---
 
-## 框架能力 — what's behind the engine
+## Framework capabilities — what's behind the engine
 
 Beneath the liuyao subsystem, OrbitAgent is a single Express service
 with the standard pieces you'd expect for a production LLM backend.
-You don't need any of this to use the 六爻 product; it's there when
+You don't need any of this to use the liuyao product; it's there when
 you want to extend.
 
 ### Multi-LLM support
@@ -119,7 +124,7 @@ present; OpenAI-compatible adapters (`kimi`, `siliconflow`, `groq`,
 automatically when their `<PROVIDER>_API_KEY` env var is set. Model
 IDs are globally unique so the routing table is a single linear scan.
 
-Default 六爻 agent uses `deepseek-v4-flash` — the system prompt +
+Default liuyao agent uses `deepseek-v4-flash` — the system prompt +
 skill/tool list is ~1280 tokens and 100% hits the prompt cache, so
 cache-friendly pricing makes the per-cast analysis essentially free.
 
@@ -151,7 +156,7 @@ and rejects cross-user access:
   (admin only).
 - **Tools** — `divination` (liuyao), `filesystem`, `search`, plus
   MCP servers declared in `config.yaml`. Per-agent tool filtering
-  means the 六爻 agent only sees `divination`; the `coding` agent
+  means the liuyao agent only sees `divination`; the `coding` agent
   sees `filesystem` and `search`.
 - **Workflows** — YAML definitions in `configs/workflows/`, hot
   reloaded every 60s.
@@ -194,7 +199,7 @@ npm run dev                   # ts-node + dotenv hot-load
 
 Server runs at `http://localhost:3000`. Health: `GET /api/v1/health`.
 
-### First 六爻 session in 3 commands
+### First liuyao session in 3 commands
 
 ```bash
 # 1. Get a dev JWT
@@ -205,12 +210,12 @@ curl -X POST http://localhost:3000/api/v1/divination/chart \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"bits":[1,1,1,1,1,1], "sessionId":"sess_demo",
        "dayStem":"甲", "dayBranch":"子",
-       "question":"求财"}'
+       "question":"Will this investment pay off?"}'
 
 # 3. Ask the agent to interpret
 curl -X POST http://localhost:3000/api/v1/chat \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"sessionId":"sess_demo", "message":"这次求财能成吗?"}'
+  -d '{"sessionId":"sess_demo", "message":"Will this investment pay off?"}'
 ```
 
 ### CLI
@@ -224,8 +229,8 @@ orbit login --dev
 
 # cast + chat
 orbit divination chart 1 1 1 1 1 1 --day-stem 甲 --day-branch 子 \
-  --question "求财" --session sess_demo
-orbit chat --session sess_demo "帮我分析"
+  --question "Will this investment pay off?" --session sess_demo
+orbit chat --session sess_demo "Analyze it for me"
 ```
 
 The `orbit` binary is a thin client over the same REST API; it
@@ -299,11 +304,11 @@ Error code namespaces: `1000=auth`, `2000=validation`, `3000=resource`,
 src/
   app.ts                       # Application class — wires middleware,
                                # routes, services, runs startup health checks
-  liuyao/                      # 六爻 subsystem (default product)
+  liuyao/                      # liuyao subsystem (default product)
     skills/                    # 13 deterministic skills
       chartAssembler.ts        #   orchestrates the 13 in fixed order
       castSkill.ts             #   6 bits/yaoValues → 6 爻值
-      hexagramSkill.ts         #   bit pattern → 64-卦 table lookup
+      hexagramSkill.ts         #   bit pattern → 64-hexagram table lookup
       palaceSkill.ts           #   palace + 世/应
       najiaSkill.ts            #   纳甲 (stem + branch + element)
       sixRelativeSkill.ts      #   六亲 (五行生克)
@@ -312,16 +317,17 @@ src/
       branchRelationSkill.ts   #   冲/合/刑/害 (P2 stub)
       transformationSkill.ts   #   动爻化出 (P2 stub)
       yongshenSkill.ts         #   用神候选 (P2 stub)
-      strengthSkill.ts         #   旺衰标签 (P2 stub)
+      strengthSkill.ts         #   旺衰 labels (P2 stub)
       fushenSkill.ts           #   伏神 (P2 stub)
     agent/
-      analysisAgent.ts         #   runAnalysisAgent — orchestrates the report
+      analysisAgent.ts         #   runAnalysisAgent — 3-stage pipeline
+      chartBrief.ts            #   buildChartBrief — structured material
       reportTemplate.ts        #   6/9-section report builder
       questionClassifier.ts    #   question type → 用神 hint
     rag/
       index.ts                 #   Mongo-backed RAG with per-user scoping
-    constants/                 # 排盘 tables: 64-卦, 纳甲, 五行, ...
-    types/                     # 排盘 TypeScript types (basic, chart, skill, agent)
+    constants/                 # chart tables: 64-hexagrams, 纳甲, 五行, ...
+    types/                     # chart TypeScript types (basic, chart, skill, agent)
   core/
     llm/                       # Multi-provider LLM adapters
     memory/                    # TemporaryMemory (Redis) + ChartStore (Mongo)
@@ -330,7 +336,7 @@ src/
     tools/                     # divination, filesystem, search, MCP
     workflow/                  # YAML workflow engine
     prompts/                   # System prompt loader
-  users/                       # 用户系统 (ritual tasks, profile, feed)
+  users/                       # user subsystem (ritual tasks, profile, feed)
   routes/                      # Express routes (chat, auth, divination, ...)
   models/                      # Mongoose models
   services/                    # database, DevAuth, TokenService, SkillInstaller
@@ -338,20 +344,20 @@ src/
   cli/                         # `orbit` binary (thin client over REST)
 
 docs/
-  base_knowledge/              # 六爻 knowledge base (system-scope RAG corpus)
+  base_knowledge/              # liuyao knowledge base (system-scope RAG corpus)
     64卦数据.json              #   the 64-hexagram table (canonical source)
     装卦方法.md                #   装卦 + 装六亲 + 装六神 rules
     六爻卦理.md                #   六爻卦理 reference
-    六爻基础.md                #   入门
-    六爻用神.md                #   用神规则
-    实例应用.md                #   实例
-    排盘补充.md                #   排盘补充 (干支, 五虎五鼠遁, 旬空, 64卦详表)
+    六爻基础.md                #   intro
+    六爻用神.md                #   用神 rules
+    实例应用.md                #   worked examples
+    排盘补充.md                #   排盘 supplement (干支, 五虎五鼠遁, 旬空, 64卦详表)
     易经详解（上/下）.md       #   易经详解
     精华荟萃（上/下篇）.md     #   精华
     起卦方法.md                #   起卦
 
-design.md                      # 系统设计文档 (排盘流程 + skill 列表)
-CLAUDE.md                      # 给 AI 助手的项目说明
+design.md                      # system design doc (排盘 flow + skill list)
+CLAUDE.md                      # project notes for AI assistants
 ```
 
 ---
@@ -473,7 +479,13 @@ orbit chat --session sess_scenario_en "Should I accept the offer?" --debug
 ```
 
 Expected `--debug` output (numbers vary by LLM provider; the shape
-is what matters):
+is what matters). Note: the LLM's analysis text comes back in
+Chinese because the agent's system prompt and knowledge base are
+in Chinese — this is intentional, since the product itself is a
+Chinese liuyao reader. The LLM's `refinedQuestionType` /
+`focusYongshen` / RAG queries are all in Chinese 六爻 terminology
+(求事业, 官鬼, 世爻空亡, etc.) — they're proper-noun tokens, not
+prose to translate:
 
 ```
 Pipeline timeline
@@ -482,7 +494,7 @@ Pipeline timeline
 ②  LLM #1 — Understand         ~7s   deepseek-v4-flash in=800 out=600
   [Understanding stage output]
     Refined question type: 求事业  (career)
-    Focus 用神: 官鬼  (official-ghost)
+    Focus 用神: 官鬼  (official-ghost, = the position itself)
     LLM-proposed RAG queries (3-4):
       · 六爻 工作 offer 官鬼 用神
       · 世爻空亡 动化回头生 事业
@@ -557,12 +569,12 @@ If any check fails:
 
 ## Status
 
-**First-step 排盘**: complete. The deterministic engine produces a
-fully-decorated chart for any of the 64 hexagrams (bits or yaoValues
-input, with or without dayStem/dayBranch); no `warnings[]` for the
-first-step data. dayStem/dayBranch/monthBranch/hourBranch/xunkong
-are auto-derived from the caller's `datetime` (or "now") via the
-[lunar-typescript](https://www.npmjs.com/package/lunar-typescript)
+**First-step chart assembly**: complete. The deterministic engine
+produces a fully-decorated chart for any of the 64 hexagrams (bits
+or yaoValues input, with or without dayStem/dayBranch); no
+`warnings[]` for the first-step data. dayStem/dayBranch/monthBranch/
+hourBranch/xunkong are auto-derived from the caller's `datetime`
+(or "now") via the [lunar-typescript](https://www.npmjs.com/package/lunar-typescript)
 calendar skill (`src/liuyao/skills/calendarSkill.ts`); the time
 block + xunkong are injected into the agent's system prompt so
 the LLM can reason about 旺衰/冲合/动爻回头生克 from the actual
@@ -571,23 +583,55 @@ cast time.
 **RAG**: the system corpus (`docs/base_knowledge/*.md`) is
 auto-bootstrapped on every server start (see [src/app.ts](src/app.ts))
 with a **contentHash cache** so only files whose body changed get
-re-embedded. Default embedder is **智谱 Embedding-3** (2048d,
+re-embedded. Default embedder is **Zhipu Embedding-3** (2048d,
 OpenAI-compatible endpoint at `open.bigmodel.cn/api/paas/v4`,
 0.5 元/Mtok). Swap with `ORBIT_EMBEDDER=hash` for dependency-free
 local dev.
 
-**Agent layer**: ships a working `default` agent that calls
-`runAnalysisAgent` (currently a thin template wrapper) → RAG-cited
-6-section report. The LLM is wired to refuse to recompute any chart
-field; it can only interpret what's in the ChartResult.
+**Agent layer**: ships a working `default` agent that runs the
+3-stage analysis pipeline (build brief → LLM #1 understand → RAG
+retrieve → LLM #2 synthesize) → RAG-cited 6/9-section report. The
+LLM is wired to refuse to recompute any chart field; it can only
+interpret what's in the ChartResult.
 
 **P2 work** (still TODO, surfaces as `warnings[]` on the chart
-response): 冲合刑害破完整规则, 完整用神候选规则, 旺衰量化打分,
-伏神/飞神, 化进化退.
+response): full 冲/合/刑/害/破 rules, full 用神 candidate rules,
+quantitative 旺衰 scoring, 伏神/飞神, 化进/化退.
 
-The 排盘 pipeline's stage-by-stage table of which data is sourced
+The chart pipeline's stage-by-stage table of which data is sourced
 externally vs. computed inline is tracked in
 `docs/liuyao/KNOWLEDGE_NEEDED.md` (P0 = 64-hexagram table, ✅).
+
+---
+
+## Glossary
+
+The README keeps the canonical Chinese terms untranslated because
+they are the same identifiers used in the code, CLI flags, system
+prompts, and the dev token. The LLM's analysis output also comes
+back in Chinese because the agent's system prompt and knowledge
+base are in Chinese. This glossary maps the English descriptions
+used in the prose to the proper-noun tokens you'll see throughout
+the codebase:
+
+| Chinese | English | Notes |
+|---|---|---|
+| 本卦 | original hexagram | the hexagram as cast |
+| 变卦 | changed hexagram | the hexagram after flipping moving lines |
+| 纳甲 | stem-branch assignment | the canonical 装纳甲 mapping of stems/branches to lines |
+| 六亲 | six relatives | 父母/兄弟/子孙/妻财/官鬼 — derived from palaceElement vs lineElement |
+| 六神 | six gods | 青龙/朱雀/勾陈/螣蛇/白虎/玄武 — derived from dayStem |
+| 世爻 / 应爻 | world line / response line | the two key markers in any hexagram |
+| 用神 | target spirit | the 六亲 the answer hinges on (e.g. 官鬼 for career) |
+| 旬空 | xunkong / void | the 12-day window when a stem-branch pair is "empty" |
+| 动爻 | moving line | yao values 6 (old yin) or 9 (old yang) — flips in the 变卦 |
+| 旺衰 | strong / weak | a line's seasonal strength (旺/相/休/囚/死) |
+| 冲合 | clash / combine | branch-to-branch relations (六冲, 六合, 三合, etc.) |
+| 回头生/克 | reciprocating 生/克 | what a moving line's resulting branch does to the original |
+| 父母 / 兄弟 / 子孙 / 妻财 / 官鬼 | parent / sibling / child / wife-wealth / official-ghost | the five 六亲 categories |
+| 甲 / 乙 / 丙 / 丁 / ... | the 10 Heavenly Stems | dayStem / monthStem / yearStem / hourStem |
+| 子 / 丑 / 寅 / ... | the 12 Earthly Branches | dayBranch / monthBranch / yearBranch / hourBranch |
+| 64 卦 / 八宫 | 64 hexagrams / 8 palaces | the full hexagram table grouped by parent palace |
 
 ---
 
