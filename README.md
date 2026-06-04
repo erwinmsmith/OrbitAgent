@@ -374,34 +374,46 @@ update both when adding a new alias.
 
 ---
 
-## 测试场景 — 小李的面试烦恼
+## Test scenario — the big-tech offer
 
 A reproducible end-to-end scenario that exercises the full multi-stage
 analysis pipeline. Use it to sanity-check that everything still works
 after a refactor, or as a guided walkthrough of the system.
 
-> **场景**：小李（dev 用户）工作两年，最近收到某互联网大厂高级
-> 工程师岗位的面试邀请，约在下周二。他昨晚翻来覆去睡不着，想用
-> 六爻问一卦：这次面试能不能拿到 offer？
+> **Story**: A backend engineer with two years of experience has just
+> received an offer for a senior role at a large tech company. The
+> on-site is scheduled for next Tuesday. They've been going back and
+> forth on whether to accept, so they sit down with the coins.
 >
-> **时间**：当前时间（Shanghai 时区）。可改 `--datetime` 自定义。
+> **Question**: *"Should I accept the senior engineer offer at the
+> big tech company?"*
 >
-> **预期分析角度**：用神为官鬼（代表职位 / offer），关注世爻旺衰
-> 与旬空、应爻生克、动爻化出、三合 / 六合 / 冲。
+> **Cast time**: Right now (Asia/Shanghai). Pass `--datetime` to
+> override.
+>
+> **Expected analytic angles**:
+> - 官鬼 (official-ghost) is the primary 用神 (target spirit) — it
+>   represents the position / offer itself.
+> - 世爻 (world line) tells the querent's own state; this scenario
+>   has the world on line 4, sitting in 旬空 (xunkong / void).
+> - 应爻 (response line) is the employer / team.
+> - The 4th line moves (老阳 → flips to 申 metal 父母), so the chart
+>   has a real transformation to read.
 
-### 1. 起卦
+### 1. Cast the chart
 
 ```bash
-# 6 枚铜钱，1 个动爻（第 4 爻 9 = 老阳 → 动）。
-# 不传 --day-stem / --day-branch — 由程序从 --datetime 推导。
+# 6 coins = yao values 7 8 7 9 7 8 (one 老阳 at position 4 → moving).
+# Don't pass --day-stem / --day-branch — let the engine derive them
+# from --datetime via the lunar-typescript calendar skill.
 orbit divination chart --yao 7 8 7 9 7 8 \
   --datetime "$(TZ='Asia/Shanghai' date '+%Y-%m-%dT%H:%M:%S+08:00')" \
   --timezone 'Asia/Shanghai' \
-  --question "面试大厂高级工程师岗位能否拿到 offer" \
-  --session sess_interview_scenario
+  --question "Should I accept the senior engineer offer at the big tech company?" \
+  --session sess_scenario_en
 ```
 
-Engine output (排盘引擎结果)：
+Engine output:
 
 ```
 time:   丙午年 / 癸巳月 / 己酉日 / 癸酉时
@@ -411,103 +423,135 @@ shi/ying:  4/1
 moving:  4
 
 本卦 革     变卦 既济
-（四世卦 — 用神位置在四爻，世在四爻）
 世爻 = 第 4 爻 (亥 兄弟，旬空，动)
 应爻 = 第 1 爻 (卯 子孙)
 ```
 
-If you want to test with a different time, override `--datetime`:
+Notes on the chart:
+- **革 → 既济** (Revolution → After Completion). Ge is about decisive
+  change; Ji Ji literally means "already crossed" — a strong symbolic
+  pairing for "should I take this leap."
+- **世爻 旬空**: the querent's own line is void this cycle. The
+  classical line "世居空地，终身作事无成" is exactly the warning
+  signal here, but the LLM has to weigh it against the moving-line
+  transformation (亥 → 申, 父母 回头生).
+- **应爻 卯 vs 日辰 酉**: 应 clashes with day branch — the role or
+  team may itself be in flux.
+
+You can re-cast with a different time to see how the engine reacts:
 
 ```bash
-# 换成凌晨 3 点 — 看看排盘引擎怎么处理深夜
+# Cast at 3am — different 旬空, different 旺衰 labels
 orbit divination chart --yao 7 8 7 9 7 8 \
   --datetime "2026-06-05T03:15:00+08:00" \
   --timezone 'Asia/Shanghai' \
-  --question "面试能否拿到 offer" \
-  --session sess_interview_3am
+  --question "Should I accept the senior engineer offer?" \
+  --session sess_scenario_en_3am
 ```
 
-### 2. 看结构化 Brief（不消耗 LLM 额度）
+### 2. Inspect the structured brief (no LLM cost)
 
 ```bash
-# 排好盘的 deterministic 文档：六亲/六神/世应/用神/排盘警告。
-# 引擎输出后送给 LLM #1 的就是这份 Brief。
-orbit divination brief --session sess_interview_scenario
+# The deterministic ChartBrief — exactly the doc that gets fed to
+# LLM #1 in the analyze pipeline. Useful for verifying the engine
+# produced what you expected.
+orbit divination brief --session sess_scenario_en
 
-# 想看原始 JSON：
-orbit divination brief --session sess_interview_scenario --json
+# Raw JSON if you want the full structured object:
+orbit divination brief --session sess_scenario_en --json
 ```
 
-### 3. 跑完整 3 阶段流水线
+### 3. Run the full 3-stage pipeline
 
 ```bash
-# 不带 --debug: 只看到 LLM 的最终回答
-orbit chat --session sess_interview_scenario "我面试能拿到 offer 吗?"
+# Without --debug: just the LLM's final answer
+orbit chat --session sess_scenario_en "Should I accept the offer?"
 
-# 带 --debug: 看到 build brief → LLM #1 understand →
-# RAG retrieve → LLM #2 synthesize 整条时间线
-orbit chat --session sess_interview_scenario "我面试能拿到 offer 吗?" --debug
+# With --debug: full timeline — build brief → LLM #1 understand →
+# RAG retrieve → LLM #2 synthesize
+orbit chat --session sess_scenario_en "Should I accept the offer?" --debug
 ```
 
-期望的 `--debug` 时间线（数字会因 LLM provider 而异）：
+Expected `--debug` output (numbers vary by LLM provider; the shape
+is what matters):
 
 ```
-分析流程时间线 (pipeline)
+Pipeline timeline
 ──────────────────────────────────────────────────────────
-①  构建 ChartBrief  0ms  lines=6
-②  LLM #1 — 理解  ~6s  deepseek-v4-flash in=800 out=600
-  [理解阶段输出]
-    细化的提问类型: 求事业
-    焦点用神: 官鬼
-    LLM 提出的 RAG 查询 (3-4 个):
-      · 官鬼持世 求事业
-      · 世爻旬空 应期
-      · 动爻化出 事业
-③  RAG 召回  ~1s  queries=6 hits=24 deduped=6
-  [RAG 召回]
-    去重后的命中 (含来源追溯):
-      - docs/base_knowledge/增删卜易.md  ... ← [官鬼 世爻]
-      - docs/base_knowledge/精华荟萃（下篇）.md  ... ← [官鬼持世]
-      ...
-④  LLM #2 — 综合分析  ~20s  deepseek-v4-flash in=3000 out=1800
+①  Build ChartBrief           0ms    lines=6
+②  LLM #1 — Understand         ~7s   deepseek-v4-flash in=800 out=600
+  [Understanding stage output]
+    Refined question type: 求事业  (career)
+    Focus 用神: 官鬼  (official-ghost)
+    LLM-proposed RAG queries (3-4):
+      · 六爻 工作 offer 官鬼 用神
+      · 世爻空亡 动化回头生 事业
+      · 官鬼两现 取用原则
+      · 应爻冲 工作 变动
+③  RAG retrieve                ~1s   queries=8 hits=32 deduped=7
+  [RAG hits]
+    Each query:
+      · 六爻 工作 offer 官鬼 用神   hits=4  topScore=0.595
+      · 世爻空亡 动化回头生 事业     hits=4  topScore=0.669
+      · 官鬼两现 取用原则            hits=4  topScore=0.651
+      · 应爻冲 工作 变动             hits=4  topScore=0.613
+    Deduped top-k (with provenance):
+      - 增删卜易.md            score=0.679 ← [六爻 其他]
+      - 精华荟萃（下篇）.md    score=0.664 ← [世爻空亡 动化回头生 事业]
+      - 实例应用.md            score=0.645 ← [六爻 其他]
+      - 精华荟萃（上篇）.md    score=0.614 ← [六爻 其他]
+      - 易经详解（下）.md      score=0.487 ← [革]
+      - 装卦方法.md            score=0.477 ← [父母]
+      - 易经详解（上）.md      score=0.397 ← [革]
+④  LLM #2 — Synthesize         ~20s  deepseek-v4-flash in=3000 out=1800
 ──────────────────────────────────────────────────────────
-总耗时: ~30s
+Total: ~29s
 ```
 
-### 4. 独立 analyze 命令（不走 /chat，直接看报告）
+### 4. Stand-alone analyze (bypasses /chat, hits the same code path)
 
 ```bash
-# 把 chart 保存到文件
+# Save the chart JSON to a file first (any cast will do)
 orbit divination chart --yao 7 8 7 9 7 8 \
   --datetime "2026-06-04T18:45:00+08:00" \
   --timezone 'Asia/Shanghai' \
-  --question "面试能否拿到 offer" \
-  --session sess_interview_file 2>&1 | tail -20
+  --question "Should I accept the senior engineer offer?" \
+  --session sess_scenario_en_file 2>&1 | tail -20
 
-# 跑 stand-alone analyze（无需 LLM 编排器）
-# 注意：stand-alone analyze 会跑完整流水线（brief → understand → RAG → synthesize）
-# 跟 /chat 内调用的 divination.analyze 是同一条代码路径
+# Then run analyze directly on the chart. This goes through the same
+# 3-stage pipeline (brief → understand → RAG → synthesize) — just
+# without the chat-loop wrapper. Add --debug to see the timeline.
+orbit divination analyze <chart.json> --debug
 ```
 
-### 检查清单
+### Health-check checklist
 
-跑完场景后，对照检查以下几条确认系统健康：
+Run the scenario, then walk this table to confirm the system is healthy:
 
-| 检查项 | 命令 / 预期 |
+| Check | Expected |
 |---|---|
-| 模型是 deepseek-v4-flash | `orbit chat ...` 末尾 `[deepseek-v4-flash/deepseek • ...]`，**不**是 `[glm-.../zhipu • ...]` |
-| 排盘 time block 包含 4 柱 | chart 输出有 `丙午年 / 癸巳月 / 己酉日 / 癸酉时` |
-| Brief 包含 6 爻六亲六神 | `orbit divination brief` 输出 6 行 `- 第 N 爻 ...` |
-| LLM #1 细化提问类型 | `--debug` 时间线有 `细化的提问类型: 求事业` 或 `求考试` |
-| LLM #1 焦点用神合理 | `--debug` 时间线有 `焦点用神: 官鬼` |
-| RAG 召回有命中 | `--debug` 时间线有 `deduped=N` 且 N > 0 |
-| 召回条目有 source | 时间线 `去重后的命中` 行有 `docs/base_knowledge/*.md` 路径 |
-| 报告含 `[cite: ...]` 标签 | LLM #2 的最终回答里至少 1 处 `[cite:` |
-| Cache 命中 | LLM #2 调用 `cacheHit` 应 > 0（system prompt 是稳定的，prompt cache 应命中） |
+| Correct model in footer | `orbit chat ...` ends with `[deepseek-v4-flash/deepseek • ...]`, **not** `[glm-.../zhipu • ...]` |
+| Time block has all 4 pillars | Chart output shows `丙午年 / 癸巳月 / 己酉日 / 癸酉时` |
+| Brief covers all 6 lines | `orbit divination brief` shows 6 lines of `- 第 N 爻 ...` |
+| LLM #1 refines the question type | `--debug` timeline shows `Refined question type: 求事业` or similar |
+| LLM #1 picks a sensible focus 用神 | Timeline shows `Focus 用神: 官鬼` (for this scenario) |
+| RAG recall produces hits | Timeline shows `deduped=N` with N > 0 |
+| Recall hits have source paths | `Deduped top-k` lines include `docs/base_knowledge/*.md` |
+| Report contains `[cite: ...]` tags | LLM #2's final answer has at least 1 `[cite:` tag |
+| Prompt cache hit on LLM #2 | `cacheHit > 0` on the synthesize call (the system prompt is stable) |
 
-如果哪一项不符合预期，参考 `docs/base_knowledge/` 下的知识库是否
-bootstrap 完整，以及 `.env` 里 `ORBIT_EMBEDDER` 是否是 `remote-zhipu`
-（hash embedder 召回质量差，可能导致 RAG deduped=0）。
+If any check fails:
+- **Model is wrong**: your `~/.orbit/config.json` may still have
+  `defaultProvider: zhipu`; the CLI passes it through unless you
+  type `--model` explicitly. Either delete the file or pass
+  `--model deepseek-v4-flash` per call.
+- **RAG deduped = 0**: the embedder is probably the default hash
+  embedder. Set `ORBIT_EMBEDDER=remote-zhipu` in `.env` and restart
+  the server. The hash embedder is dependency-free but its recall
+  is mediocre.
+- **`cacheHit = 0`**: something is varying the system prompt between
+  calls (e.g. a timestamp). Check `prompts/system/liuyao-agent.yaml`
+  for any non-static content.
 
 ---
 
