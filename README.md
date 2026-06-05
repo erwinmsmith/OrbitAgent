@@ -376,7 +376,7 @@ echo "请总结这个报告" | orbit chat --agent generic
 
 #### 2.3.1 交互式六爻 CLI 应用
 
-`orbit liuyao` 是一个类似 Claude Code 启动体验的交互式命令行应用，CLI 中的 Agent 展示名是 **Roy**。启动后会展示三枚铜钱 logo、检查知识库是否需要增量更新、列出可切换的历史会话，然后进入起卦或追问流程。新卦会调用 `/divination/ask`，追问会调用 `/chat`，并复用同一个 `sessionId`。
+`orbit liuyao` 是一个类似 Claude Code 的对话式六爻 CLI 应用，CLI 中的 Agent 展示名是 **Roy**。它不是把系统日志、排盘和报告混在一起输出，而是按「状态栏 → 工具执行块 → 排盘摘要 → Roy 回复」组织界面。新卦会调用 `/divination/ask`，追问会调用 `/chat`，并复用同一个 `sessionId`、Mongo permanent memory 和已保存卦盘。
 
 ```bash
 orbit liuyao                                # 启动后选择起卦方式，回车默认自动摇卦
@@ -389,34 +389,86 @@ orbit liuyao --method coins --thinking --angles 4
 orbit liuyao --no-rag-check                 # 跳过启动知识库检查
 ```
 
-交互中输入：
+启动时会先展示核心命令，随后列出最近会话：
 
 ```text
-# 不传 --method 时先选择方式
-会话 [new] > 
-方式 [2] > 2
-问题 > 我是否应该接受这份新工作 offer？
-深度推演？[y/N] > y
+╭────────────────────────────────────────────────────────────╮
+│ Orbit Liuyao · Roy                                         │
+│ 六爻排盘 · RAG 解卦 · 多轮追问                               │
+╰────────────────────────────────────────────────────────────╯
+Session: new
+Mode: 自动摇卦 · coins
+Memory: enabled
+RAG: enabled
 
-# manual
-问题 > 我是否应该接受这份新工作 offer？
-六爻 > 7 8 7 9 7 8
+╭─ Commands ─────────────────────────────────────────────────╮
+│ /new  /chart  /why  /rag  /tools  /sessions  /help  /exit   │
+│ /chart full 展开完整卦画与六爻表；/rag check 手动检查知识库。 │
+╰────────────────────────────────────────────────────────────╯
 
-# numbers
-问题 > 我是否应该接受这份新工作 offer？
-数字 > 2 9 5
-
-# character
-问题 > 最近财运如何？
-汉字 > 财
+选择会话 [new] >
 ```
 
-完成第一次起卦后，交互页会进入当前 session 的追问模式。此时继续输入普通文本会调用 `/chat`，复用同一个 `sessionId`、历史消息和已保存卦盘，不会重新摇卦。
+进入对话后，如果没有传 `--method`，Roy 会先让你选择起卦方式：
 
 ```text
-追问 > 刚刚我问了什么？
-追问 > 那小猫更亲近谁？
+╭─ Roy · Liuyao ─────────────────────────────────────────────╮
+│ session: new                                               │
+│ method: coins    chart: none    rag: on    memory: on      │
+│ thinking: off                                              │
+╰────────────────────────────────────────────────────────────╯
+
+Roy > 请选择起卦方式：
+      [1] 手动六爻
+      [2] 自动摇卦
+      [3] 时间起卦
+      [4] 数字起卦
+      [5] 汉字起卦
+你 > 2
+Roy > 已切换为：自动摇卦 · coins。
+      输入问题后，我会自动完成：起卦 → 排盘 → 检索 → 分析。
+      Commands: /new  /chart  /why  /rag  /tools  /sessions  /help  /exit
 ```
+
+起卦后默认只展示压缩信息：工具执行块、排盘摘要和 Roy 的短结论。完整六爻表、卦画、RAG 来源和详细推理都通过 slash commands 展开。
+
+```text
+你 > 这笔投资能赚钱吗
+深度推演？[y/N] > n
+
+╭─ Running divination flow ──────────────────────────────────╮
+│ ✓ cast.coins        8 7 8 8 8 7                             │
+│ ✓ chart.assemble    山水蒙 → 山水蒙 · 静卦                   │
+│ ✓ calendar          丙午年 / 甲午月 / 庚戌日 / 癸未时         │
+│ ✓ rag.retrieve      6 chunks                                │
+│ ✓ analyze           brief + detailed                        │
+╰────────────────────────────────────────────────────────────╯
+
+╭─ Chart ────────────────────────────────────────────────────╮
+│ 问题：这笔投资能赚钱吗                                      │
+│ 起卦：coins · 8 7 8 8 8 7                                   │
+│ 本卦：山水蒙        变卦：山水蒙        静卦                  │
+│ 卦宫：离宫 · 四世 · 火                                      │
+│ 动爻：无                                                    │
+│ 世爻：第 4 爻 丙戌(土) 子孙 临朱雀                           │
+│ 应爻：第 1 爻 戊寅(木) 父母 临白虎 旬空                      │
+╰────────────────────────────────────────────────────────────╯
+
+Roy >
+结论：这个卦需要谨慎，不适合只看收益而忽略风险。
+关键依据：
+  1. ...
+  2. ...
+  3. ...
+你可以继续问：
+  /why       看详细逻辑
+  /chart     看排盘摘要
+  /chart full 看完整卦画与六爻表
+  /rag       看检索依据
+  /new       重新起卦
+```
+
+第一次起卦完成后，普通输入会进入当前 session 的追问模式，不会重新起卦；需要重新起卦时输入 `/new`。
 
 交互页命令：
 
@@ -424,10 +476,18 @@ orbit liuyao --no-rag-check                 # 跳过启动知识库检查
 |---|---|
 | `/new [method]` | 开启新卦；可选 `manual`、`coins`、`time`、`numbers`、`character` |
 | `/method [method]` | 切换下一次新卦的起卦方式 |
+| `/chart` | 查看当前排盘摘要 |
+| `/chart full` | 展开完整卦画、六爻表、六亲六神、世应、旬空、变爻 |
+| `/why` | 展开分析摘要和完整报告；不是模型私密推理链 |
+| `/rag` | 查看本轮检索依据，默认不展示 |
+| `/rag check` | 手动检查 `docs/base_knowledge/*.md`，有变化才更新 embedding |
+| `/tools` | 查看本轮工具调用：起卦、排盘、日历、检索、分析 |
+| `/session` | 查看当前会话状态和当前卦上下文 |
 | `/sessions` | 查看当前用户保存在 Mongo 的历史会话 |
 | `/use <sessionId>` | 切换到已有 session，后续输入作为追问 |
 | `/history [sessionId]` | 查看当前或指定 session 最近消息 |
-| `/rag-check` | 手动检查 `docs/base_knowledge/*.md`，有变化才更新 embedding |
+| `/export` | 导出当前报告到本地 markdown |
+| `/clear` | 清屏并重绘当前状态栏 |
 | `/exit` | 退出 |
 
 退出：

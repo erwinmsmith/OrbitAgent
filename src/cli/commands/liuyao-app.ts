@@ -1,18 +1,40 @@
 /**
- * `orbit liuyao` — an interactive CLI app for the complete 六爻 flow.
+ * `orbit liuyao` — interactive 六爻 CLI.
  *
- * This deliberately stays a thin client: every reading goes through
- * POST /divination/ask, which does chart assembly + RAG-backed analysis
- * on the server and stores a chat turn for follow-up.
+ * This command is intentionally a presentation layer. Casting, chart
+ * assembly, RAG retrieval, analysis, and memory persistence still go
+ * through the existing API flow.
  */
+import fs from 'fs';
+import path from 'path';
 import { Command } from 'commander';
 import readline from 'readline';
 import chalk from 'chalk';
 import { apiGet, apiPost } from '../http';
 import { postDivinationAsk, renderDivinationReading, renderPipelineTimeline } from './divination';
 
-const DEFAULT_PROMPT = '请结合卦象分析、解答问题';
+const DEFAULT_PROMPT = [
+  '请结合卦象分析、解答问题。',
+  '交互式 CLI 场景下，请先给短结论，再给 3 个以内关键依据。',
+  '语言要自然，和用户语言一致；不要默认写成论文式长报告。',
+  '可保留足够细节，供用户通过 /why 展开。',
+].join('');
+
+const BOX_WIDTH = 72;
+const CORE_COMMANDS = '/new  /chart  /why  /rag  /tools  /sessions  /help  /exit';
+
 type LiuyaoAppMethod = 'manual' | 'coins' | 'time' | 'numbers' | 'character';
+
+type AppState = {
+  currentSessionId: string | null;
+  method: LiuyaoAppMethod;
+  lastQuestion: string | null;
+  lastReading: any | null;
+  lastChat: any | null;
+  ragEnabled: boolean;
+  memoryEnabled: boolean;
+  thinkingLabel: string;
+};
 
 export function registerLiuyaoApp(program: Command): void {
   program
@@ -22,94 +44,61 @@ export function registerLiuyaoApp(program: Command): void {
     .option('--thinking', 'Enable thinking mode for every reading in this app session', false)
     .option('--angles <n>', 'Number of thinking angles, clamped by the server to 1–5', (v) => parseInt(v, 10))
     .option('--timezone <tz>', 'Timezone passed to the calendar skill', 'Asia/Shanghai')
-    .option('--debug', 'Show debug pipeline for ask/chat calls.', false)
+    .option('--debug', 'Show raw debug pipeline after ask/chat calls.', false)
     .option('--no-rag-check', 'Skip startup knowledge-base update check.')
     .action(async (opts) => {
-      printLogo(opts);
+      const state: AppState = {
+        currentSessionId: null,
+        method: opts.method ? normalizeMethod(opts.method) : 'coins',
+        lastQuestion: null,
+        lastReading: null,
+        lastChat: null,
+        ragEnabled: true,
+        memoryEnabled: true,
+        thinkingLabel: opts.thinking
+          ? `on (${Number.isFinite(opts.angles) ? opts.angles : 3} angles)`
+          : 'off',
+      };
+
+      printLogo(state);
+      printStartupCommands();
 
       const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
       const ask = (q: string) => new Promise<string>((resolve) => rl.question(q, resolve));
 
       try {
         if (opts.ragCheck !== false) await checkKnowledgeBase(false);
-        let currentSessionId: string | null = await promptSessionChoice(ask);
-        let method: LiuyaoAppMethod = opts.method ? normalizeMethod(opts.method) : 'coins';
-        if (!currentSessionId) {
-          const initialMethod = opts.method ? method : await promptMethod(ask);
+
+        state.currentSessionId = await promptSessionChoice(ask);
+        printConversationHeader(state);
+
+        if (!state.currentSessionId) {
+          const initialMethod = opts.method ? state.method : await promptMethod(ask);
           if (!initialMethod) return;
-          method = initialMethod;
-          printUsage(method);
-          console.log();
+          state.method = initialMethod;
+          printMethodConfirmation(state.method);
         } else {
-          console.log(chalk.gray(`已进入追问模式：${currentSessionId}`));
-          console.log(chalk.gray('普通输入会作为追问发送给 Roy；输入 /new 可重新起卦，/help 查看命令。\n'));
+          printRoyLines([
+            `已进入历史会话：${state.currentSessionId}`,
+            '普通输入会作为追问发送给 Roy；输入 /new 可重新起卦。',
+          ]);
         }
 
         while (true) {
-          const input = (await ask(chalk.cyan(currentSessionId ? '追问 > ' : '问题 > '))).trim();
+          const input = (await ask(chalk.cyan('你 > '))).trim();
           if (isExit(input)) break;
           if (!input) continue;
 
-          const commandResult = await handleAppCommand(input, {
-            ask,
-            getCurrentSession: () => currentSessionId,
-            setCurrentSession: (sessionId) => { currentSessionId = sessionId; },
-            getMethod: () => method,
-            setMethod: (nextMethod) => {
-              method = nextMethod;
-              printUsage(method);
-              console.log();
-            },
-          });
+          const commandResult = await handleAppCommand(input, state, opts, ask);
           if (commandResult === 'handled') continue;
           if (commandResult === 'exit') break;
 
-          if (currentSessionId) {
-            printStatus('Roy 正在读取当前会话并回复...');
-            try {
-              const data = await postChatFollowup(currentSessionId, input, opts);
-              currentSessionId = data.sessionId || currentSessionId;
-              printChatReply(data, opts);
-            } catch (err: any) {
-              console.log(chalk.red(`✗ ${err.message}`));
-            }
+          if (state.currentSessionId) {
+            await runFollowup(input, state, opts);
             continue;
           }
 
-          const sessionId = `sess_cli_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-          const castingInput = await promptCastingInput(method, ask);
-          if (castingInput === 'exit') break;
-          if (!castingInput) continue;
-
-          const body: any = {
-            sessionId,
-            question: input,
-            message: DEFAULT_PROMPT,
-            timezone: opts.timezone,
-            datetime: new Date().toISOString(),
-            debug: !!opts.debug,
-          };
-          Object.assign(body, castingInput);
-          const deepMode = opts.thinking || await promptDeepMode(ask, opts.angles);
-          if (deepMode) body.thinking = true;
-          if (Number.isFinite(opts.angles)) body.angles = opts.angles;
-
-          printStatus('Roy 正在排盘并解卦...');
-          try {
-            const data = await postDivinationAsk(body);
-            if (data._fallback) {
-              console.log(chalk.yellow('⚠ 当前后端还没有 /divination/ask，已自动使用 chart → chat 兼容流程。重启 npm run dev 后会走新 API。'));
-              console.log();
-            }
-            printReadingSummary(data);
-            currentSessionId = data.sessionId || sessionId;
-            printRoyMessage(data.content || '(no analysis content)');
-            if (opts.debug && data.debug) renderPipelineTimeline(data.debug);
-            console.log(chalk.gray(`\n当前 session：${currentSessionId}`));
-            console.log(chalk.gray('继续输入会作为追问进入同一 session。输入 /new 重新起卦，/sessions 查看会话，/use <sessionId> 切换，/help 查看命令。\n'));
-          } catch (err: any) {
-            console.log(chalk.red(`✗ ${err.message}`));
-          }
+          await runNewReading(input, state, opts, ask);
         }
       } finally {
         rl.close();
@@ -117,15 +106,80 @@ export function registerLiuyaoApp(program: Command): void {
     });
 }
 
-type CommandContext = {
-  ask: (q: string) => Promise<string>;
-  getCurrentSession: () => string | null;
-  setCurrentSession: (sessionId: string | null) => void;
-  getMethod: () => LiuyaoAppMethod;
-  setMethod: (method: LiuyaoAppMethod) => void;
-};
+async function runNewReading(
+  question: string,
+  state: AppState,
+  opts: any,
+  ask: (q: string) => Promise<string>,
+): Promise<void> {
+  const sessionId = `sess_cli_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const castingInput = await promptCastingInput(state.method, ask);
+  if (castingInput === 'exit') return;
+  if (!castingInput) return;
 
-async function handleAppCommand(input: string, ctx: CommandContext): Promise<'handled' | 'exit' | 'none'> {
+  const deepMode = opts.thinking || await promptDeepMode(ask, opts.angles);
+  state.thinkingLabel = deepMode
+    ? `on (${Number.isFinite(opts.angles) ? opts.angles : 3} angles)`
+    : 'off';
+
+  const body: any = {
+    sessionId,
+    question,
+    message: DEFAULT_PROMPT,
+    timezone: opts.timezone,
+    datetime: new Date().toISOString(),
+    // Interactive mode keeps structured internals for /tools and /rag,
+    // but the default screen renders a concise user-facing view.
+    debug: true,
+  };
+  Object.assign(body, castingInput);
+  if (deepMode) body.thinking = true;
+  if (Number.isFinite(opts.angles)) body.angles = opts.angles;
+
+  printWorkingBox('Roy 正在起卦、排盘、检索依据并生成分析...');
+  try {
+    const data = await postDivinationAsk(body);
+    if (data._fallback) {
+      printBox('Notice', ['当前后端还没有 /divination/ask，已自动使用 chart → chat 兼容流程。']);
+    }
+    state.currentSessionId = data.sessionId || sessionId;
+    state.lastQuestion = question;
+    state.lastReading = data;
+    state.lastChat = null;
+
+    printConversationHeader(state);
+    printRunningBlock(data);
+    printChartSummary(data, question);
+    printAssistantBrief(data);
+    if (opts.debug && data.debug) renderPipelineTimeline(data.debug);
+  } catch (err: any) {
+    printBox('Error', [String(err.message || err)]);
+  }
+}
+
+async function runFollowup(input: string, state: AppState, opts: any): Promise<void> {
+  printWorkingBox('Roy 正在读取当前会话并回复...');
+  try {
+    const data = await postChatFollowup(state.currentSessionId!, input, opts);
+    state.currentSessionId = data.sessionId || state.currentSessionId;
+    state.lastChat = data;
+    printAssistantMessage(data.content || '(no response content)');
+    if (opts.debug && data.debug) {
+      renderPipelineTimeline(data.debug.pipeline || data.debug);
+    }
+  } catch (err: any) {
+    printBox('Error', [String(err.message || err)]);
+  }
+}
+
+type CommandResult = 'handled' | 'exit' | 'none';
+
+async function handleAppCommand(
+  input: string,
+  state: AppState,
+  opts: any,
+  ask: (q: string) => Promise<string>,
+): Promise<CommandResult> {
   if (!input.startsWith('/')) return 'none';
   const [cmd, ...args] = input.slice(1).trim().split(/\s+/).filter(Boolean);
   const command = (cmd || '').toLowerCase();
@@ -133,57 +187,120 @@ async function handleAppCommand(input: string, ctx: CommandContext): Promise<'ha
 
   if (['q', 'quit', 'exit'].includes(command)) return 'exit';
   if (['h', 'help'].includes(command)) {
-    printAppCommands(ctx.getCurrentSession(), ctx.getMethod());
+    printAppCommands(state);
     return 'handled';
   }
   if (command === 'new') {
     if (args[0]) {
       try {
-        ctx.setMethod(normalizeMethod(args[0]));
+        state.method = normalizeMethod(args[0]);
       } catch (err: any) {
-        console.log(chalk.red(err.message));
+        printBox('Error', [err.message]);
         return 'handled';
       }
     }
-    ctx.setCurrentSession(null);
-    console.log(chalk.gray('已切换到新起卦模式。下一条「问题」会重新起卦。'));
+    state.currentSessionId = null;
+    state.lastQuestion = null;
+    state.lastReading = null;
+    state.lastChat = null;
+    printConversationHeader(state);
+    printRoyLines([
+      `已切换到新起卦模式，当前方式：${methodLabel(state.method)}。`,
+      '下一条输入会作为新问题重新起卦。',
+    ]);
     return 'handled';
   }
   if (command === 'method') {
-    const next = args[0] ? normalizeMethod(args[0]) : await promptMethod(ctx.ask);
-    if (next) ctx.setMethod(next);
+    const next = args[0] ? normalizeMethod(args[0]) : await promptMethod(ask);
+    if (next) {
+      state.method = next;
+      printMethodConfirmation(next);
+    }
     return 'handled';
   }
-  if (command === 'sessions') {
-    await printSessions(ctx.getCurrentSession());
-    return 'handled';
-  }
-  if (command === 'use') {
-    const sessionId = args[0];
-    if (!sessionId) {
-      console.log(chalk.red('用法：/use <sessionId>'));
+  if (command === 'chart') {
+    if (!state.lastReading) {
+      printBox('Chart', ['当前会话还没有可展示的排盘。先输入问题起卦，或 /use 切换到已有会话后继续追问。']);
       return 'handled';
     }
-    ctx.setCurrentSession(sessionId);
-    console.log(chalk.green(`已切换到 session：${sessionId}`));
+    if (['full', '--full', '-f'].includes((args[0] || '').toLowerCase())) {
+      renderDivinationReading(state.lastReading);
+    } else {
+      printChartSummary(state.lastReading, state.lastQuestion || undefined);
+      printBox('Hint', ['完整六爻表和卦画：/chart full']);
+    }
     return 'handled';
   }
-  if (command === 'history') {
-    const sessionId = args[0] || ctx.getCurrentSession();
-    if (!sessionId) {
-      console.log(chalk.red('当前没有 session。用法：/history <sessionId>'));
+  if (command === 'why') {
+    if (!state.lastReading) {
+      printBox('Analysis trace', ['当前没有可展开的起卦分析。']);
       return 'handled';
     }
-    await printHistory(sessionId);
+    printAnalysisTrace(state.lastReading);
+    printAssistantMessage(cleanReportForDisplay(state.lastReading.content || ''));
+    return 'handled';
+  }
+  if (command === 'rag') {
+    if ((args[0] || '').toLowerCase() === 'check') {
+      await checkKnowledgeBase(true);
+    } else {
+      printRagSources(state.lastReading);
+    }
     return 'handled';
   }
   if (command === 'rag-check') {
     await checkKnowledgeBase(true);
     return 'handled';
   }
+  if (command === 'tools') {
+    printToolCalls(state.lastReading);
+    return 'handled';
+  }
+  if (command === 'session') {
+    printSessionMemory(state);
+    return 'handled';
+  }
+  if (command === 'sessions') {
+    await printSessions(state.currentSessionId);
+    return 'handled';
+  }
+  if (command === 'use') {
+    const sessionId = args[0];
+    if (!sessionId) {
+      printBox('Usage', ['/use <sessionId>']);
+      return 'handled';
+    }
+    state.currentSessionId = sessionId;
+    state.lastQuestion = null;
+    state.lastReading = null;
+    state.lastChat = null;
+    printConversationHeader(state);
+    printRoyLines([
+      `已切换到 session：${sessionId}`,
+      '后续输入会作为追问。若要重新起卦，输入 /new。',
+    ]);
+    return 'handled';
+  }
+  if (command === 'history') {
+    const sessionId = args[0] || state.currentSessionId;
+    if (!sessionId) {
+      printBox('Usage', ['当前没有 session。用法：/history <sessionId>']);
+      return 'handled';
+    }
+    await printHistory(sessionId);
+    return 'handled';
+  }
+  if (command === 'export') {
+    exportLastReading(state);
+    return 'handled';
+  }
+  if (command === 'clear') {
+    process.stdout.write('\x1Bc');
+    printConversationHeader(state);
+    return 'handled';
+  }
 
-  console.log(chalk.red(`未知命令：/${command}`));
-  printAppCommands(ctx.getCurrentSession(), ctx.getMethod());
+  printBox('Unknown command', [`/${command}`, `Commands: ${CORE_COMMANDS}`]);
   return 'handled';
 }
 
@@ -199,19 +316,20 @@ function normalizeMethod(value: string): LiuyaoAppMethod {
 
 async function promptMethod(ask: (q: string) => Promise<string>): Promise<LiuyaoAppMethod | null> {
   while (true) {
-    console.log(chalk.gray('请选择起卦方式：'));
-    console.log(chalk.gray('  1. 手动六爻       输入 6 个 6/7/8/9 或 0/1'));
-    console.log(chalk.gray('  2. 自动摇卦       模拟三枚硬币摇六次'));
-    console.log(chalk.gray('  3. 时间起卦       使用当前时间'));
-    console.log(chalk.gray('  4. 数字起卦       输入 3 个数字'));
-    console.log(chalk.gray('  5. 汉字起卦       输入 1 个汉字'));
-    const raw = (await ask(chalk.cyan('方式 [2] > '))).trim();
+    printRoyLines([
+      '请选择起卦方式：',
+      '[1] 手动六爻',
+      '[2] 自动摇卦',
+      '[3] 时间起卦',
+      '[4] 数字起卦',
+      '[5] 汉字起卦',
+    ]);
+    const raw = (await ask(chalk.cyan('你 > '))).trim();
     if (isExit(raw)) return null;
     try {
       return normalizeMethod(raw || '2');
     } catch (err: any) {
-      console.log(chalk.red(err.message));
-      console.log();
+      printBox('Error', [err.message]);
     }
   }
 }
@@ -221,33 +339,33 @@ async function promptSessionChoice(ask: (q: string) => Promise<string>): Promise
   try {
     conversations = await listPermanentConversations();
   } catch (err: any) {
-    console.log(chalk.yellow(`历史会话暂不可用：${err.message}`));
+    printBox('Sessions', [`历史会话暂不可用：${err.message}`, 'Session: new']);
     return null;
   }
-  if (conversations.length === 0) return null;
-  console.log(chalk.gray('最近会话：'));
-  conversations.slice(0, 8).forEach((c, i) => {
-    const title = c.title || c.sessionId;
-    const when = c.updatedAt ? new Date(c.updatedAt).toLocaleString() : '';
-    console.log(chalk.gray(`  ${i + 1}. ${title}  ${chalk.cyan(c.sessionId)} ${when ? chalk.gray(when) : ''}`));
-  });
-  console.log(chalk.gray('直接回车新建会话；输入序号或 sessionId 切换历史会话。'));
+  if (conversations.length === 0) {
+    printBox('Sessions', ['最近会话：无', 'Session: new']);
+    return null;
+  }
+
+  printBox('最近会话', [
+    ...conversations.slice(0, 8).map((c, i) => {
+      const title = c.title || c.sessionId;
+      return `${i + 1}. ${title}    ${c.sessionId}`;
+    }),
+    '直接回车新建会话；输入序号或 sessionId 切换历史会话。',
+  ]);
+
   while (true) {
-    const raw = (await ask(chalk.cyan('会话 [new] > '))).trim();
+    const raw = (await ask(chalk.cyan('选择会话 [new] > '))).trim();
     if (isExit(raw)) return null;
     if (!raw || raw.toLowerCase() === 'new') return null;
     const index = Number(raw);
     if (Number.isInteger(index) && index >= 1 && index <= conversations.length) {
-      const sessionId = conversations[index - 1]!.sessionId;
-      console.log(chalk.green(`已进入历史会话：${sessionId}`));
-      return sessionId;
+      return conversations[index - 1]!.sessionId;
     }
     const match = conversations.find((c) => c.sessionId === raw);
-    if (match) {
-      console.log(chalk.green(`已进入历史会话：${match.sessionId}`));
-      return match.sessionId;
-    }
-    console.log(chalk.red('没有找到该会话。请输入序号、sessionId，或回车新建。'));
+    if (match) return match.sessionId;
+    printBox('Sessions', ['没有找到该会话。请输入序号、sessionId，或回车新建。']);
   }
 }
 
@@ -258,42 +376,8 @@ async function promptDeepMode(ask: (q: string) => Promise<string>, angles: numbe
     if (isExit(raw)) return false;
     if (!raw || raw === 'n' || raw === 'no' || raw === '否') return false;
     if (raw === 'y' || raw === 'yes' || raw === '是') return true;
-    console.log(chalk.red('请输入 y 或 n。'));
+    printBox('Input', ['请输入 y 或 n。']);
   }
-}
-
-function printUsage(method: LiuyaoAppMethod): void {
-  const methodLabel = {
-    manual: '手动六爻',
-    coins: '自动摇卦',
-    time: '时间起卦',
-    numbers: '三数起卦',
-    character: '汉字起卦',
-  }[method];
-  console.log(chalk.gray(`当前起卦方式：${methodLabel}。每次都会完成：起卦 → 排盘 → RAG 解卦 → 可继续追问的 session。`));
-  if (method === 'manual') {
-    console.log(chalk.gray('爻值顺序：初爻到上爻，自下而上。支持 6/7/8/9；也支持 0/1 静卦。输入 /exit 退出。'));
-  } else if (method === 'coins') {
-    console.log(chalk.gray('每次输入问题后自动模拟三枚硬币摇六次；输入 /exit 退出。'));
-  } else if (method === 'time') {
-    console.log(chalk.gray('每次输入问题后按当前时间起卦；输入 /exit 退出。'));
-  } else if (method === 'numbers') {
-    console.log(chalk.gray('每次输入问题后继续输入 3 个数字：第 1 数上卦，第 2 数下卦，第 3 数动爻；输入 /exit 退出。'));
-  } else {
-    console.log(chalk.gray('每次输入问题后继续输入 1 个汉字；优先按笔画起卦，查不到用 Unicode 兜底；输入 /exit 退出。'));
-  }
-}
-
-function printAppCommands(currentSessionId: string | null, method: LiuyaoAppMethod): void {
-  console.log(chalk.gray('可用命令：'));
-  console.log(chalk.gray('  /new [method]        重新起卦，可选 method: manual|coins|time|numbers|character'));
-  console.log(chalk.gray('  /method [method]     切换下一次起卦方式'));
-  console.log(chalk.gray('  /sessions            查看当前用户的历史会话'));
-  console.log(chalk.gray('  /use <sessionId>     切换到已有 session，后续输入作为追问'));
-  console.log(chalk.gray('  /history [sessionId] 查看当前或指定 session 最近消息'));
-  console.log(chalk.gray('  /rag-check           手动检查知识库文件并按需更新 embedding'));
-  console.log(chalk.gray('  /exit                退出'));
-  console.log(chalk.gray(`当前 method=${method}${currentSessionId ? `，session=${currentSessionId}` : '，尚未起卦'}`));
 }
 
 async function promptCastingInput(
@@ -308,7 +392,7 @@ async function promptCastingInput(
     if (isExit(rawNumbers)) return 'exit';
     const numbers = parseThreeNumbers(rawNumbers);
     if (!numbers) {
-      console.log(chalk.red('请输入 3 个数字，例如：2 9 5'));
+      printBox('Input', ['请输入 3 个数字，例如：2 9 5']);
       return null;
     }
     return { casting: { method: 'numbers', numbers } };
@@ -319,7 +403,7 @@ async function promptCastingInput(
     if (isExit(rawCharacter)) return 'exit';
     const characters = Array.from(rawCharacter);
     if (characters.length !== 1) {
-      console.log(chalk.red('请输入 1 个汉字，例如：财'));
+      printBox('Input', ['请输入 1 个汉字，例如：财']);
       return null;
     }
     return { casting: { method: 'character', character: characters[0] } };
@@ -329,7 +413,7 @@ async function promptCastingInput(
   if (isExit(rawValues)) return 'exit';
   const parsed = parseLineValues(rawValues);
   if (!parsed) {
-    console.log(chalk.red('请输入 6 个数字，例如：7 8 7 9 7 8 或 1 1 1 1 1 1'));
+    printBox('Input', ['请输入 6 个数字，例如：7 8 7 9 7 8 或 1 1 1 1 1 1']);
     return null;
   }
   return parsed.kind === 'bits'
@@ -348,18 +432,6 @@ async function postChatFollowup(sessionId: string, message: string, opts: any): 
   return apiPost<any>('/chat', body);
 }
 
-function printChatReply(data: any, opts: any): void {
-  printRoyMessage(data.content || '(no response content)');
-  if (opts.debug && data.debug) {
-    renderPipelineTimeline(data.debug.pipeline || data.debug);
-  }
-  const usage = data.usage
-    ? ` in=${data.usage.inputTokens ?? 0} out=${data.usage.outputTokens ?? 0}`
-    : '';
-  console.log(chalk.gray(`\n[session=${data.sessionId}${usage}]`));
-  console.log(chalk.gray('继续输入可追问；输入 /new 重新起卦。\n'));
-}
-
 async function listPermanentConversations(): Promise<any[]> {
   const data = await apiGet<any[]>('/memory/permanent', { pageSize: 20 });
   return Array.isArray(data) ? data : [];
@@ -369,18 +441,17 @@ async function printSessions(currentSessionId: string | null): Promise<void> {
   try {
     const conversations = await listPermanentConversations();
     if (conversations.length === 0) {
-      console.log(chalk.gray('(当前用户没有历史会话)'));
+      printBox('Sessions', ['当前用户没有历史会话。']);
       return;
     }
-    console.log(chalk.gray('当前用户历史会话：'));
-    conversations.forEach((c, i) => {
-      const active = currentSessionId === c.sessionId ? chalk.green(' *') : '  ';
+    printBox('Sessions', conversations.map((c, i) => {
+      const active = currentSessionId === c.sessionId ? '*' : ' ';
       const title = c.title || c.sessionId;
       const when = c.updatedAt ? new Date(c.updatedAt).toLocaleString() : '';
-      console.log(`${active}${i + 1}. ${chalk.cyan(c.sessionId)}  ${title}${when ? chalk.gray(`  ${when}`) : ''}`);
-    });
+      return `${active} ${i + 1}. ${c.sessionId}  ${title}${when ? `  ${when}` : ''}`;
+    }));
   } catch (err: any) {
-    console.log(chalk.red(`✗ ${err.message}`));
+    printBox('Error', [String(err.message || err)]);
   }
 }
 
@@ -392,69 +463,240 @@ async function printHistory(sessionId: string): Promise<void> {
       ? await apiGet<any[]>(`/memory/permanent/${encodeURIComponent(conversation.id)}/messages`, { pageSize: 8 })
       : await apiGet<any[]>(`/chat/${encodeURIComponent(sessionId)}`, { limit: 6 });
     if (!Array.isArray(messages) || messages.length === 0) {
-      console.log(chalk.gray(`(no history for ${sessionId})`));
+      printBox('History', [`no history for ${sessionId}`]);
       return;
     }
-    console.log(chalk.gray(`session ${sessionId} 最近消息：`));
-    for (const m of messages) {
-      const who = m.role === 'user' ? chalk.cyan('You') : chalk.green('Roy');
-      const content = String(m.content || '').replace(/\s+/g, ' ').slice(0, 240);
-      console.log(`${who}: ${content}${content.length >= 240 ? '...' : ''}`);
-    }
+    printBox(`History ${sessionId}`, messages.map((m) => {
+      const who = m.role === 'user' ? '你' : 'Roy';
+      const content = String(m.content || '').replace(/\s+/g, ' ').slice(0, 180);
+      return `${who}: ${content}${content.length >= 180 ? '...' : ''}`;
+    }));
   } catch (err: any) {
-    console.log(chalk.red(`✗ ${err.message}`));
+    printBox('Error', [String(err.message || err)]);
   }
 }
 
 async function checkKnowledgeBase(manual: boolean): Promise<void> {
   try {
-    printStatus(manual ? '正在检查知识库更新...' : '启动检查知识库更新...');
+    printWorkingBox(manual ? '正在检查知识库更新...' : '启动检查知识库更新...');
     const r = await apiPost<any>('/divination/rag/rebuild');
     const skipped = r.skipped ?? 0;
     const ingested = r.ingested ?? 0;
     const deleted = r.deleted ?? 0;
-    console.log(chalk.gray(`知识库检查完成：更新 ${ingested}，跳过 ${skipped}，删除 ${deleted}。`));
+    printBox('Knowledge Base', [`更新 ${ingested}，跳过 ${skipped}，删除 ${deleted}。`]);
   } catch (err: any) {
-    const msg = String(err.message || err);
-    console.log(chalk.yellow(`知识库检查跳过：${msg}`));
+    printBox('Knowledge Base', [`检查跳过：${String(err.message || err)}`]);
   }
 }
 
-function parseThreeNumbers(raw: string): [number, number, number] | null {
-  const values = raw.split(/[,\s]+/).filter(Boolean).map((v) => Number(v));
-  if (values.length !== 3 || values.some((v) => !Number.isFinite(v))) return null;
-  return values.map((v) => Math.trunc(v)) as [number, number, number];
+function printLogo(state: AppState): void {
+  printBox('', [
+    'Orbit Liuyao · Roy',
+    '六爻排盘 · RAG 解卦 · 多轮追问',
+  ]);
+  console.log(`Session: ${chalk.cyan(state.currentSessionId || 'new')}`);
+  console.log(`Mode: ${chalk.cyan(methodLabel(state.method))}`);
+  console.log(`Memory: ${chalk.green(state.memoryEnabled ? 'enabled' : 'off')}`);
+  console.log(`RAG: ${chalk.green(state.ragEnabled ? 'enabled' : 'off')}`);
 }
 
-function printLogo(opts: any): void {
-  const coin = chalk.yellow.bold('◯');
-  const hole = chalk.gray('□');
-  console.log(chalk.bold(`
- ${coin} ${coin} ${coin}
-${chalk.yellow('╭─────╮ ╭─────╮ ╭─────╮')}
-${chalk.yellow('│')}  ${hole}  ${chalk.yellow('│ │')}  ${hole}  ${chalk.yellow('│ │')}  ${hole}  ${chalk.yellow('│')}
-${chalk.yellow('╰─────╯ ╰─────╯ ╰─────╯')}
- Orbit Liuyao · Roy
-`));
-  console.log(chalk.gray('────────────────────────────────────────────────────────────'));
-  console.log(`${chalk.green('Roy')}  六爻 Agent · RAG 解卦 · 多会话记忆`);
-  console.log(chalk.gray(`     深度推演：${opts.thinking ? '默认开启' : '解卦前询问'} · 输入 /help 查看命令`));
-  console.log(chalk.gray('────────────────────────────────────────────────────────────'));
+function printStartupCommands(): void {
+  printBox('Commands', [
+    CORE_COMMANDS,
+    '/chart full 展开完整卦画与六爻表；/rag check 手动检查知识库。',
+  ]);
 }
 
-function printStatus(text: string): void {
+function printConversationHeader(state: AppState): void {
+  const chartName = state.lastReading ? chartPair(state.lastReading.chart || {}) : 'none';
+  printBox('Roy · Liuyao', [
+    `session: ${state.currentSessionId || 'new'}`,
+    `method: ${state.method}    chart: ${chartName}    rag: ${state.ragEnabled ? 'on' : 'off'}    memory: ${state.memoryEnabled ? 'on' : 'off'}`,
+    `thinking: ${state.thinkingLabel}`,
+  ]);
+}
+
+function printMethodConfirmation(method: LiuyaoAppMethod): void {
+  printRoyLines([
+    `已切换为：${methodLabel(method)}。`,
+    '输入问题后，我会自动完成：起卦 → 排盘 → 检索 → 分析。',
+    `Commands: ${CORE_COMMANDS}`,
+  ]);
+}
+
+function printAppCommands(state: AppState): void {
+  printBox('Commands', [
+    '/new [method]        重新起卦，可选 manual|coins|time|numbers|character',
+    '/method [method]     切换下一次起卦方式',
+    '/chart               查看当前排盘摘要',
+    '/chart full          查看完整六爻表和卦画',
+    '/why                 展开分析摘要与完整报告',
+    '/rag                 查看本轮检索依据',
+    '/rag check           手动检查知识库并按需更新 embedding',
+    '/tools               查看本轮工具调用',
+    '/session             查看当前会话状态',
+    '/sessions            查看历史会话',
+    '/use <sessionId>     切换到已有 session',
+    '/history [sessionId] 查看当前或指定 session 最近消息',
+    '/export              导出当前报告',
+    '/clear               清屏',
+    '/exit                退出',
+    '',
+    `当前：session=${state.currentSessionId || 'new'} method=${state.method} chart=${state.lastReading ? chartPair(state.lastReading.chart || {}) : 'none'}`,
+  ]);
+}
+
+function printWorkingBox(text: string): void {
+  printBox('Roy is working', [`⠋ ${text}`]);
+}
+
+function printRunningBlock(data: any): void {
+  printBox('Running divination flow', buildToolRows(data, 'summary'));
+}
+
+function printToolCalls(data: any | null): void {
+  if (!data) {
+    printBox('Tool calls', ['当前没有工具调用记录。']);
+    return;
+  }
+  printBox('Tool calls', buildToolRows(data, 'detail'));
+}
+
+function buildToolRows(data: any, mode: 'summary' | 'detail'): string[] {
+  const chart = data.chart || {};
+  const debug = data.debug || {};
+  const ragHits = debug.rag?.deduped?.length ?? data.report?.citations?.length ?? 0;
+  const usage = debug.synthesis?.usage || data.usage;
+  const rows = [
+    `✓ cast.${data.casting?.method || 'input'}        ${formatYaoValues(data.casting)}`,
+    `✓ chart.assemble    ${chartPair(chart)} · ${movingLabel(chart)}`,
+    `✓ calendar          ${formatCalendar(chart)}`,
+    `✓ rag.retrieve      ${ragHits} chunks`,
+    `✓ analyze           ${data.thinking ? `${data.angles || 3} angles` : 'brief + detailed'}${usage?.outputTokens ? ` · ${usage.outputTokens} tokens` : ''}`,
+  ];
+  if (mode === 'detail') {
+    const queries = debug.rag?.queries || debug.understanding?.ragQueries || [];
+    if (Array.isArray(queries) && queries.length) rows.push(`rag.query          ${queries.slice(0, 4).join(' / ')}`);
+    const focus = debug.understanding?.focusYongshen || [];
+    if (Array.isArray(focus) && focus.length) rows.push(`analysis.focus     ${focus.join('、')}`);
+  }
+  return rows;
+}
+
+function printChartSummary(data: any, question?: string): void {
+  const chart = data.chart || {};
+  const shi = findLine(chart, 'shi');
+  const ying = findLine(chart, 'ying');
+  const yongshen = formatYongshen(chart);
+  const rows = [
+    question ? `问题：${question}` : '',
+    `起卦：${formatCasting(data.casting)}`,
+    `本卦：${hexName(chart.originalHexagram)}        变卦：${hexName(chart.changedHexagram)}        ${movingLabel(chart)}`,
+    `卦宫：${chart.originalHexagram?.palace ?? '?'}宫 · ${chart.originalHexagram?.palaceType ?? '?'} · ${chart.originalHexagram?.element ?? '?'}`,
+    `动爻：${formatMoving(chart)}`,
+    shi ? `世爻：${formatLineSummary(shi)}` : '世爻：未标注',
+    ying ? `应爻：${formatLineSummary(ying)}` : '应爻：未标注',
+    yongshen ? `用神：${yongshen}` : '',
+  ].filter(Boolean);
+  printBox('Chart', rows);
+}
+
+function printAssistantBrief(data: any): void {
+  const report = data.report || {};
+  const conclusion = pickConclusion(report, data.content);
+  const points = pickKeyPoints(report, data);
+  printAssistantMessage([
+    `结论：${conclusion}`,
+    '',
+    '关键依据：',
+    ...points.map((p, i) => `  ${i + 1}. ${p}`),
+    '',
+    '你可以继续问：',
+    '  /why       看详细逻辑',
+    '  /chart     看排盘摘要',
+    '  /chart full 看完整卦画与六爻表',
+    '  /rag       看检索依据',
+    '  /new       重新起卦',
+  ].join('\n'));
+}
+
+function printAssistantMessage(content: string): void {
+  console.log(chalk.green('Roy >'));
+  console.log(cleanReportForDisplay(content));
   console.log();
-  console.log(chalk.gray('────────────────────────────────────────────────────────────'));
-  console.log(`${chalk.green('Roy')} ${chalk.gray(text)}`);
-  console.log(chalk.gray('────────────────────────────────────────────────────────────'));
+}
+
+function printRoyLines(lines: string[]): void {
+  console.log(chalk.green('Roy > ') + lines[0]);
+  for (const line of lines.slice(1)) console.log(`      ${line}`);
   console.log();
 }
 
-function printRoyMessage(content: string): void {
-  console.log(chalk.green('Roy'));
-  console.log(chalk.gray('────────────────────────────────────────────────────────────'));
-  console.log(content);
-  console.log(chalk.gray('────────────────────────────────────────────────────────────'));
+function printAnalysisTrace(data: any): void {
+  const debug = data.debug || {};
+  const chart = data.chart || {};
+  const focus = debug.understanding?.focusYongshen || data.brief?.yongshen?.candidates?.map((c: any) => c.relative) || [];
+  const questionType = debug.understanding?.refinedQuestionType || data.report?.understanding?.questionType || data.brief?.questionType || '未识别';
+  const synthesis = firstSentence(data.report?.synthesis || data.content || '');
+  printBox('Analysis trace', [
+    `1. 识别问题类型：${questionType}`,
+    `2. 程序候选用神：${Array.isArray(focus) && focus.length ? focus.join('、') : '未明确'}`,
+    `3. 关键结构：${movingLabel(chart)}；世爻 ${linePos(findLine(chart, 'shi'))}；应爻 ${linePos(findLine(chart, 'ying'))}`,
+    `4. 综合方向：${synthesis || '详见完整报告'}`,
+  ]);
+}
+
+function printRagSources(data: any | null): void {
+  if (!data) {
+    printBox('RAG Sources', ['当前没有检索记录。']);
+    return;
+  }
+  const hits = data.debug?.rag?.deduped || data.report?.citations || [];
+  if (!Array.isArray(hits) || hits.length === 0) {
+    printBox('RAG Sources', ['本轮没有可展示的检索命中。']);
+    return;
+  }
+  printBox('RAG Sources', hits.slice(0, 8).map((h: any, i: number) => {
+    const source = h.source || 'unknown';
+    const title = h.title ? ` · ${h.title}` : '';
+    const score = typeof h.score === 'number' ? `score ${h.score.toFixed(2)}` : '';
+    return `${i + 1}. ${source}${title}    ${score}`;
+  }));
+}
+
+function printSessionMemory(state: AppState): void {
+  printBox('Session Memory', [
+    `当前 session：${state.currentSessionId || 'new'}`,
+    `当前问题：${state.lastQuestion || '无'}`,
+    `当前卦：${state.lastReading ? chartPair(state.lastReading.chart || {}) : 'none'}`,
+    `起卦方式：${state.method}`,
+    `已生成报告：${state.lastReading ? 'brief + detailed' : '无'}`,
+    `最近追问：${state.lastChat?.content ? trimText(state.lastChat.content, 80) : '无'}`,
+  ]);
+}
+
+function exportLastReading(state: AppState): void {
+  if (!state.lastReading) {
+    printBox('Export', ['当前没有可导出的报告。']);
+    return;
+  }
+  const session = state.currentSessionId || 'new';
+  const file = path.resolve(process.cwd(), `orbit-liuyao-${session}.md`);
+  const data = state.lastReading;
+  const content = [
+    `# Orbit Liuyao Report`,
+    '',
+    `- session: ${session}`,
+    `- question: ${state.lastQuestion || ''}`,
+    `- chart: ${chartPair(data.chart || {})}`,
+    `- casting: ${formatCasting(data.casting)}`,
+    '',
+    '## Analysis',
+    '',
+    cleanReportForDisplay(data.content || ''),
+  ].join('\n');
+  fs.writeFileSync(file, content, 'utf8');
+  printBox('Export', [`已导出：${file}`]);
 }
 
 function isExit(value: string): boolean {
@@ -469,7 +711,197 @@ function parseLineValues(raw: string): { kind: 'bits' | 'yaoValues'; values: num
   return null;
 }
 
-function printReadingSummary(data: any): void {
-  renderDivinationReading(data);
-  console.log();
+function parseThreeNumbers(raw: string): [number, number, number] | null {
+  const values = raw.split(/[,\s]+/).filter(Boolean).map((v) => Number(v));
+  if (values.length !== 3 || values.some((v) => !Number.isFinite(v))) return null;
+  return values.map((v) => Math.trunc(v)) as [number, number, number];
+}
+
+function methodLabel(method: LiuyaoAppMethod): string {
+  const label = {
+    manual: '手动六爻 · manual',
+    coins: '自动摇卦 · coins',
+    time: '时间起卦 · time',
+    numbers: '数字起卦 · numbers',
+    character: '汉字起卦 · character',
+  }[method];
+  return label;
+}
+
+function chartPair(chart: any): string {
+  return `${hexName(chart.originalHexagram)} → ${hexName(chart.changedHexagram)}`;
+}
+
+function hexName(hexagram: any): string {
+  return hexagram?.fullName || hexagram?.name || '?';
+}
+
+function movingLabel(chart: any): string {
+  const moving = chart.movingLines || [];
+  return Array.isArray(moving) && moving.length ? `动爻 ${moving.join('、')}` : '静卦';
+}
+
+function formatMoving(chart: any): string {
+  const moving = chart.movingLines || [];
+  return Array.isArray(moving) && moving.length ? moving.join('、') : '无';
+}
+
+function formatCalendar(chart: any): string {
+  const t = chart.time || {};
+  if (!t.yearStem) return 'unknown';
+  return `${t.yearStem}${t.yearBranch}年 / ${t.monthStem}${t.monthBranch}月 / ${t.dayStem}${t.dayBranch}日 / ${t.hourStem}${t.hourBranch}时`;
+}
+
+function formatCasting(casting: any): string {
+  if (!casting) return 'unknown';
+  const values = formatYaoValues(casting);
+  return values ? `${casting.method} · ${values}` : casting.method || 'unknown';
+}
+
+function formatYaoValues(casting: any): string {
+  if (Array.isArray(casting?.yaoValues)) return casting.yaoValues.join(' ');
+  if (Array.isArray(casting?.values)) return casting.values.join(' ');
+  return '';
+}
+
+function findLine(chart: any, kind: 'shi' | 'ying'): any | null {
+  const lines = chart?.lines;
+  if (!Array.isArray(lines)) return null;
+  return lines.find((l) => kind === 'shi' ? l.isShi : l.isYing) || null;
+}
+
+function linePos(line: any | null): string {
+  return line ? `第 ${line.position} 爻` : '未标注';
+}
+
+function formatLineSummary(line: any): string {
+  const parts = [
+    `第 ${line.position} 爻`,
+    `${line.stem || ''}${line.branch || ''}${line.element ? `(${line.element})` : ''}`,
+    line.sixRelative,
+    line.sixGod ? `临${line.sixGod}` : '',
+    line.void ? '旬空' : '',
+    line.moving ? '动' : '',
+  ].filter(Boolean);
+  return parts.join(' ');
+}
+
+function formatYongshen(chart: any): string {
+  const candidates = chart?.yongshen?.candidates;
+  if (!Array.isArray(candidates) || candidates.length === 0) return '';
+  return candidates.slice(0, 2).map((c: any) => {
+    const positions = Array.isArray(c.positions) && c.positions.length
+      ? `，第 ${c.positions.join('、')} 爻`
+      : '';
+    return `${c.relative}${positions}`;
+  }).join('；');
+}
+
+function pickConclusion(report: any, content: string): string {
+  const source = report?.synthesis || report?.summary || content || '';
+  const cleaned = cleanInline(source)
+    .replace(/^结论[:：]\s*/, '')
+    .replace(/^综合判断[:：]\s*/, '');
+  return firstSentence(cleaned) || trimText(cleaned, 120) || '当前卦象需要结合背景谨慎判断。';
+}
+
+function pickKeyPoints(report: any, data: any): string[] {
+  const points = [
+    firstSentence(report?.originalHexagramInterpretation),
+    firstSentence(report?.movingLineAnalysis),
+    firstSentence(report?.shiYingAnalysis || report?.yongshenAnalysis),
+  ].filter(Boolean);
+  if (points.length > 0) return points.slice(0, 3);
+
+  const chart = data.chart || {};
+  return [
+    `本卦为 ${hexName(chart.originalHexagram)}，变卦为 ${hexName(chart.changedHexagram)}。`,
+    `${movingLabel(chart)}，这是判断事情是否有变化机制的关键。`,
+    `世爻在 ${linePos(findLine(chart, 'shi'))}，应爻在 ${linePos(findLine(chart, 'ying'))}。`,
+  ];
+}
+
+function firstSentence(value: unknown): string {
+  const text = cleanInline(String(value || ''));
+  if (!text) return '';
+  const match = text.match(/^(.{1,160}?[。！？.!?])(?:\s|$)/);
+  return match ? match[1] : trimText(text, 140);
+}
+
+function cleanReportForDisplay(value: string): string {
+  return String(value || '')
+    .replace(/\n## 引用[\s\S]*$/m, '')
+    .replace(/\[cite:[^\]]+\]/g, '')
+    .replace(/\[[0-9,\s]+\]/g, '')
+    .trim();
+}
+
+function cleanInline(value: string): string {
+  return cleanReportForDisplay(value)
+    .replace(/^#+\s*/gm, '')
+    .replace(/\*\*/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function trimText(value: string, max: number): string {
+  const text = cleanInline(value);
+  return visibleWidth(text) > max ? `${sliceVisible(text, max - 1)}…` : text;
+}
+
+function printBox(title: string, lines: string[], width = BOX_WIDTH): void {
+  const inner = width - 4;
+  const titleText = title ? `─ ${title} ` : '';
+  const topFill = Math.max(0, width - 2 - visibleWidth(titleText));
+  console.log(chalk.gray(`╭${titleText}${'─'.repeat(topFill)}╮`));
+  const body = lines.length ? lines : [''];
+  for (const rawLine of body) {
+    const wrapped = wrapLine(stripAnsi(String(rawLine)), inner);
+    for (const line of wrapped) {
+      console.log(chalk.gray('│ ') + line + ' '.repeat(Math.max(0, inner - visibleWidth(line))) + chalk.gray(' │'));
+    }
+  }
+  console.log(chalk.gray(`╰${'─'.repeat(width - 2)}╯`));
+}
+
+function wrapLine(line: string, width: number): string[] {
+  if (!line) return [''];
+  const out: string[] = [];
+  let current = '';
+  for (const char of Array.from(line)) {
+    if (visibleWidth(current + char) > width) {
+      out.push(current);
+      current = char;
+    } else {
+      current += char;
+    }
+  }
+  out.push(current);
+  return out;
+}
+
+function visibleWidth(value: string): number {
+  let width = 0;
+  for (const char of Array.from(stripAnsi(value))) {
+    const code = char.codePointAt(0) || 0;
+    width += code > 0x1100 ? 2 : 1;
+  }
+  return width;
+}
+
+function sliceVisible(value: string, max: number): string {
+  let width = 0;
+  let out = '';
+  for (const char of Array.from(value)) {
+    const code = char.codePointAt(0) || 0;
+    const w = code > 0x1100 ? 2 : 1;
+    if (width + w > max) break;
+    out += char;
+    width += w;
+  }
+  return out;
+}
+
+function stripAnsi(value: string): string {
+  return value.replace(/\u001b\[[0-9;]*m/g, '');
 }
