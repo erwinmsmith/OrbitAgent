@@ -65,7 +65,10 @@ export class PermanentMemory implements IPermanentStore {
     } catch (error: any) {
       if (error.code === 11000) {
         // Duplicate sessionId - return existing conversation
-        const existing = await ConversationModel.findOne({ sessionId: conversation.sessionId });
+        const existing = await ConversationModel.findOne({
+          sessionId: conversation.sessionId,
+          userId: conversation.userId,
+        });
         if (existing) {
           return toPlainConversation(existing);
         }
@@ -85,9 +88,12 @@ export class PermanentMemory implements IPermanentStore {
     }
   }
 
-  async getConversationBySessionId(sessionId: string): Promise<PermanentConversation | null> {
+  async getConversationBySessionId(sessionId: string, userId?: string): Promise<PermanentConversation | null> {
     try {
-      const doc = await ConversationModel.findOne({ sessionId });
+      const doc = await ConversationModel.findOne({
+        sessionId,
+        ...(userId ? { userId } : {}),
+      });
       return doc ? toPlainConversation(doc) : null;
     } catch (error) {
       logger.error('Failed to get conversation by sessionId:', error);

@@ -376,19 +376,59 @@ echo "请总结这个报告" | orbit chat --agent generic
 
 #### 2.3.1 交互式六爻 CLI 应用
 
-`orbit liuyao` 是一个类似 Claude Code 启动体验的交互式命令行应用。启动后会展示三枚铜钱 logo，然后循环输入问题和 6 个爻值。每次提交都会调用 `/divination/ask`，完成起卦、排盘、RAG 解卦，并返回一个可继续追问的 session。
+`orbit liuyao` 是一个类似 Claude Code 启动体验的交互式命令行应用，CLI 中的 Agent 展示名是 **Roy**。启动后会展示三枚铜钱 logo、检查知识库是否需要增量更新、列出可切换的历史会话，然后进入起卦或追问流程。新卦会调用 `/divination/ask`，追问会调用 `/chat`，并复用同一个 `sessionId`。
 
 ```bash
-orbit liuyao
-orbit liuyao --thinking --angles 4
+orbit liuyao                                # 启动后选择起卦方式，回车默认自动摇卦
+orbit liuyao --method manual                # 直接进入手动输入 6 个爻值
+orbit liuyao --method coins                 # 自动摇卦
+orbit liuyao --method time                  # 按当前时间起卦
+orbit liuyao --method numbers               # 每次输入 3 个数字
+orbit liuyao --method character             # 每次输入 1 个汉字
+orbit liuyao --method coins --thinking --angles 4
+orbit liuyao --no-rag-check                 # 跳过启动知识库检查
 ```
 
 交互中输入：
 
 ```text
+# 不传 --method 时先选择方式
+会话 [new] > 
+方式 [2] > 2
+问题 > 我是否应该接受这份新工作 offer？
+深度推演？[y/N] > y
+
+# manual
 问题 > 我是否应该接受这份新工作 offer？
 六爻 > 7 8 7 9 7 8
+
+# numbers
+问题 > 我是否应该接受这份新工作 offer？
+数字 > 2 9 5
+
+# character
+问题 > 最近财运如何？
+汉字 > 财
 ```
+
+完成第一次起卦后，交互页会进入当前 session 的追问模式。此时继续输入普通文本会调用 `/chat`，复用同一个 `sessionId`、历史消息和已保存卦盘，不会重新摇卦。
+
+```text
+追问 > 刚刚我问了什么？
+追问 > 那小猫更亲近谁？
+```
+
+交互页命令：
+
+| 命令 | 作用 |
+|---|---|
+| `/new [method]` | 开启新卦；可选 `manual`、`coins`、`time`、`numbers`、`character` |
+| `/method [method]` | 切换下一次新卦的起卦方式 |
+| `/sessions` | 查看当前用户保存在 Mongo 的历史会话 |
+| `/use <sessionId>` | 切换到已有 session，后续输入作为追问 |
+| `/history [sessionId]` | 查看当前或指定 session 最近消息 |
+| `/rag-check` | 手动检查 `docs/base_knowledge/*.md`，有变化才更新 embedding |
+| `/exit` | 退出 |
 
 退出：
 
@@ -651,10 +691,31 @@ curl -X POST http://localhost:3000/api/v1/divination/ask \
 
 默认情况下，`/divination/ask` 的 `content` 是给终端和前端直接展示的干净正文，不包含 `## 引用`，也不显示 `[cite: ...]`。如果请求里传 `debug: true`，`content` 会保留引用信息，并额外返回 `debug.pipeline`、`debug.rag`、`debug.perAngle` 等审计数据。
 
-`/divination/ask` 始终返回 `sessionId`、`chart`、`report`、`brief`、`content`；`debug` 只在 `debug: true` 时返回。服务端会把默认提示词和最终报告写入临时 chat memory，所以之后可以继续追问：
+`/divination/ask` 始终返回 `sessionId`、`chart`、`report`、`brief`、`content`；`debug` 只在 `debug: true` 时返回。服务端会把默认提示词和最终报告写入 Redis 临时记忆和 Mongo 永久会话，所以之后可以继续追问：
 
 ```bash
 orbit chat --session sess_api_full "如果我延后一周再答复，会有什么变化？"
+```
+
+单用户多会话管理使用 memory/chat 接口。`/chat` 会优先读取 Redis；如果 Redis 里没有当前 session，会从 Mongo permanent messages 回填上下文，再继续回答：
+
+```bash
+# 当前用户的永久历史会话
+curl http://localhost:3000/api/v1/memory/permanent \
+  -H "Authorization: Bearer $TOKEN"
+
+# 指定 conversation 的永久消息
+curl http://localhost:3000/api/v1/memory/permanent/<conversationId>/messages \
+  -H "Authorization: Bearer $TOKEN"
+
+# 向指定 session 追问，不重新起卦
+curl -X POST http://localhost:3000/api/v1/chat \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sessionId": "sess_api_full",
+    "message": "刚刚我问了什么？"
+  }'
 ```
 
 上传私有知识：

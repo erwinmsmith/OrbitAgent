@@ -60,6 +60,7 @@ import {
   saveChart, getChart, listChartKeys, getLatestChart,
 } from '../core/memory/ChartStore';
 import { getTemporaryMemory } from '../core/memory/TemporaryMemory';
+import { getPermanentMemory } from '../core/memory/PermanentMemory';
 import { getAgent } from '../core/agents/AgentLoader';
 import { HTTP_STATUS } from '../constants';
 import { logger } from '../utils/logger';
@@ -302,6 +303,7 @@ router.post('/ask', asyncHandler(async (req: Request, res: Response) => {
   // Store this as a normal chat turn so the caller can immediately
   // continue with `orbit chat --session <id> ...`.
   const tempMemory = getTemporaryMemory();
+  const permanentMemory = getPermanentMemory();
   await tempMemory.addMessage(sessionId, {
     userId,
     sessionId,
@@ -318,6 +320,40 @@ router.post('/ask', asyncHandler(async (req: Request, res: Response) => {
     modelId: analysis.debug?.synthesis?.model || body.model || agent?.model,
     modelProvider: analysis.debug?.synthesis?.provider || body.provider || agent?.provider,
   });
+  const conversation = await permanentMemory.getConversationBySessionId(sessionId, userId) ??
+    await permanentMemory.createConversation({
+      userId,
+      sessionId,
+      agentId: agent?.id || body.agentId || 'default',
+      modelId: body.model || agent?.model || analysis.debug?.synthesis?.model || 'unknown',
+      modelProvider: body.provider || agent?.provider || analysis.debug?.synthesis?.provider || 'unknown',
+      title: (body.question || message || '六爻起卦').slice(0, 60),
+      tags: ['liuyao', 'divination'],
+      isArchived: false,
+    });
+  await Promise.all([
+    permanentMemory.addMessage(conversation.id, {
+      role: 'user',
+      content: message,
+      modelId: body.model || agent?.model,
+      modelProvider: body.provider || agent?.provider,
+      metadata: {
+        question: body.question,
+        chartKey,
+        casting,
+      },
+    }),
+    permanentMemory.addMessage(conversation.id, {
+      role: 'assistant',
+      content,
+      modelId: analysis.debug?.synthesis?.model || body.model || agent?.model,
+      modelProvider: analysis.debug?.synthesis?.provider || body.provider || agent?.provider,
+      metadata: {
+        chartKey,
+        report: analysis.report,
+      },
+    }),
+  ]);
 
   res.json({
     success: true,

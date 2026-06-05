@@ -162,7 +162,8 @@ const STEP_SYNTHESIZE_THINKING_SYSTEM = `你是六爻分析 Agent 的"综合分�
   分析过，且都附带了 RAG 引用）
 - 用户的原始问题
 
-你的任务是写一份 6-9 段的综合分析报告（中文），要求：
+你的任务是写一份 6-9 段的综合分析报告。语言必须与用户问题保持一致；用户用中文就全程中文。
+要求：
 1. 严格基于 ChartBrief 中的结构化信息 — 不能改写本卦/变卦/六亲/六神/世应/纳甲/旬空/旺衰/用神候选。
 2. **必须整合多个角度的发现**。如果角度 A 说"用神旺"，角度 B 说"世爻空"，
    你需要把两个事实同时呈现并讨论它们的关系，而不是只挑一个。
@@ -170,19 +171,16 @@ const STEP_SYNTHESIZE_THINKING_SYSTEM = `你是六爻分析 Agent 的"综合分�
    "妻财持世，求财可得 [cite: docs/base_knowledge/六爻用神.md]"。
    没有引用就**不要**编造 [cite: ...] 标签。
 4. 不能下"一定成/一定不成"的绝对断言 — 给出"倾向于 / 有利于 / 不利于 / 需注意"的谨慎判断。
-5. 报告结构（6 段 MVP，可扩展到 9 段）：
+5. 面向用户输出时，不要出现 ChartBrief、RAG、LLM、pipeline、debug、JSON、Markdown、文件路径、provider、token 等工程术语。
+6. 报告结构：
    ① 卦象概要：简述本卦/变卦/动爻/世应
    ② 本卦解释：本卦的卦象含义（结合卦辞、卦理、卦宫五行）
    ③ 动爻分析：动爻的爻辞含义、动爻化出、与日辰月令的关系
    ④ 用神分析：用神候选的旺衰、与日辰/世应/动爻的生克
    ⑤ 世应关系：世爻与应爻的五行生克
    ⑥ 综合判断：结合以上各段 + 多个角度的发现，给出对用户问题的倾向性判断和需要补充的信息
-6. 最后必须列一个"不确定性与缺失信息"段落，列出：
-   - 排盘中 warns 的内容
-   - 理解阶段 missingContext 的内容
-   - 你自身不能从 ChartBrief 推出的信息
-7. 在报告开头，列出本次 thinking 模式涉及的所有分析角度名称（让读者知道这是
-   多角度分析的结果），格式如："> 分析角度：用神与旺衰 / 世应与动变 / 时间与月令"
+7. 最后只在确实需要时列一个"不确定性与补充信息"段落，内容必须是用户能理解的现实信息，例如排盘警告、问题背景不足、需要用户补充的事实。
+8. 在报告开头，列出本次深度推演涉及的所有分析角度名称，格式如："> 分析角度：用神与旺衰 / 世应与动变 / 时间与月令"
 
 输出 Markdown，不要包裹在 JSON 里。`;
 
@@ -193,23 +191,22 @@ const STEP_SYNTHESIZE_SYSTEM = `你是六爻分析 Agent 的"综合分析阶段"
 - 从六爻知识库召回的相关片段（每条带 [cite: source] 标签）
 - 用户的原始问题
 
-你的任务是写一份 6-9 段的综合分析报告（中文），要求：
+你的任务是写一份 6-9 段的综合分析报告。语言必须与用户问题保持一致；用户用中文就全程中文。
+要求：
 1. 严格基于 ChartBrief 中的结构化信息 — 不能改写本卦/变卦/六亲/六神/世应/纳甲/旬空/旺衰/用神候选。
 2. 引用召回片段时，**必须**保留 [cite: source] 标签，例如：
    "妻财持世，求财可得 [cite: docs/base_knowledge/六爻用神.md]"。
    没有引用就**不要**编造 [cite: ...] 标签。
 3. 不能下"一定成/一定不成"的绝对断言 — 给出"倾向于 / 有利于 / 不利于 / 需注意"的谨慎判断。
-4. 报告结构（6 段 MVP，可扩展到 9 段）：
+4. 面向用户输出时，不要出现 ChartBrief、RAG、LLM、pipeline、debug、JSON、Markdown、文件路径、provider、token 等工程术语。
+5. 报告结构：
    ① 卦象概要：简述本卦/变卦/动爻/世应
    ② 本卦解释：本卦的卦象含义（结合卦辞、卦理、卦宫五行）
    ③ 动爻分析：动爻的爻辞含义、动爻化出、与日辰月令的关系
    ④ 用神分析：用神候选的旺衰、与日辰/世应/动爻的生克
    ⑤ 世应关系：世爻与应爻的五行生克
    ⑥ 综合判断：结合以上各段，给出对用户问题的倾向性判断和需要补充的信息
-5. 最后必须列一个"不确定性与缺失信息"段落，列出：
-   - 排盘中 warns 的内容
-   - 理解阶段 missingContext 的内容
-   - 你自身不能从 ChartBrief 推出的信息
+6. 最后只在确实需要时列一个"不确定性与补充信息"段落，内容必须是用户能理解的现实信息，例如排盘警告、问题背景不足、需要用户补充的事实。
 
 输出 Markdown，不要包裹在 JSON 里。`;
 
@@ -708,10 +705,8 @@ export async function runAnalysisAgent(
     strengthAndRelations: extractSection(reportMarkdown, '旺衰与关系') || '',
     synthesis: extractSection(reportMarkdown, '综合判断') || reportMarkdown,
     uncertainties: [
-      thinking
-        ? `报告由 ${1 + perAngle.length + 1} 次 LLM 调用生成（理解阶段 + ${perAngle.length} 个独立分析角度 + 综合分析阶段）。每个分析角度都有独立的 RAG 上下文；请审阅 debug.pipeline 了解每步的输入与输出。`
-        : '报告由两次 LLM 调用生成（理解阶段 + 综合分析阶段）；请审阅 debug.pipeline 了解每步的输入与输出。',
       ...(brief.warnings?.length ? [`排盘警告：${brief.warnings.join('；')}`] : []),
+      ...deriveMissingContext(brief, parsedUnderstand),
     ],
     citations,
   };
@@ -905,17 +900,17 @@ function synthesizeFallback(
     (brief.movingLines.length ? `动爻：第${brief.movingLines.join('、')}爻。` : '无动爻。'),
   );
   if (intermediate) {
-    lines.push('\n## 理解阶段');
+    lines.push('\n## 初步观察');
     lines.push(intermediate);
   }
   if (hits.length > 0) {
-    lines.push('\n## 召回的知识库片段');
+    lines.push('\n## 可参考依据');
     for (const h of hits.slice(0, 4)) {
       lines.push(`- [cite: ${h.chunk.source}] ${h.chunk.text.slice(0, 200)}`);
     }
   }
   lines.push('\n## 综合判断');
-  lines.push('（综合分析阶段 LLM 不可用，仅返回 ChartBrief + 召回片段 + 理解阶段输出。请重新提问或检查 LLM provider 配置。）');
+  lines.push('当前暂时无法生成完整解读，只能先返回排盘摘要和可参考依据。请稍后重试或检查模型服务配置。');
   return lines.join('\n');
 }
 

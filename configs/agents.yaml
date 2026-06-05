@@ -6,7 +6,7 @@ agents:
   # default. Callers that want a generic chat can still pass
   # agentId=generic; the same agent is also reachable under id=liuyao.
   - id: default
-    name: 六爻 Divination Agent
+    name: Roy
     description: 六爻 specialist. Reads a stored ChartResult, calls the deterministic engine, and produces a structured AnalysisReport with RAG citations. Never re-computes 排盘/装卦/纳甲/六亲 itself.
     model: deepseek-v4-flash
     provider: deepseek
@@ -21,7 +21,7 @@ agents:
 
   # Alias — same config as `default`, but reachable explicitly.
   - id: liuyao
-    name: 六爻 Divination Agent
+    name: Roy
     description: Alias for the default 六爻 agent. Kept for callers that prefer the explicit id.
     model: deepseek-v4-flash
     provider: deepseek

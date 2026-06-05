@@ -188,35 +188,7 @@ export function registerDivination(program: Command): void {
         console.log(`  ${chalk.bold('本卦')} ${data.originalHexagram?.fullName ?? data.originalHexagram?.name ?? '?'}` +
                     `     ${chalk.bold('变卦')} ${chalk.cyan(data.changedHexagram?.fullName ?? data.changedHexagram?.name ?? '?')}`);
         renderHexagramPair(data);
-        // Line decorations (branch, sixRelative, sixGod). Show both
-        // 本卦 and 变卦 columns for clarity when a chart has moving
-        // lines. The 变卦's sixGod is intentionally the same as the
-        // 本卦's (六神 only depends on day stem), so we only print
-        // it once per line.
-        if (Array.isArray(data.lines)) {
-          const hasMoving = Array.isArray(data.movingLines) && data.movingLines.length > 0;
-          if (hasMoving) {
-            console.log();
-            console.log(chalk.gray('  Lines (pos: branch sixRelative sixGod | 变 branch 变 sixRel):'));
-            for (const l of data.lines) {
-              const voidMark = l.void ? ' [旬空]' : '';
-              const movingMark = l.moving ? chalk.yellow(' 动') : '';
-              const changedRel = l.changedSixRelative
-                ? `${l.changedBranch} ${l.changedSixRelative}`
-                : chalk.gray('—');
-              console.log(chalk.gray(
-                `    ${l.position}: ${l.branch} ${l.sixRelative} 临${l.sixGod}${voidMark}${movingMark}` +
-                chalk.reset(`  |  变: ${changedRel}`),
-              ));
-            }
-          } else {
-            console.log();
-            console.log(chalk.gray('  Lines (pos: branch sixRelative sixGod):'));
-            for (const l of data.lines) {
-              console.log(chalk.gray(`    ${l.position}: ${l.branch} ${l.sixRelative} 临${l.sixGod}${l.void ? ' [旬空]' : ''}`));
-            }
-          }
-        }
+        renderLineDetails(data);
         console.log();
         console.log(chalk.gray(`Next: orbit chat --session ${sessionId} "帮我分析"`));
         console.log(chalk.gray(`Or:   orbit divination analyze <chart.json>  (for a stand-alone report)`));
@@ -284,26 +256,7 @@ export function registerDivination(program: Command): void {
         if (data._fallback) {
           console.log(chalk.yellow('⚠ server does not expose /divination/ask yet; used chart → chat fallback. Restart npm run dev to use the new API directly.'));
         }
-        const chart = data.chart || {};
-        console.log(chalk.green('✓ Full divination flow completed.'));
-        console.log(`  sessionId: ${chalk.cyan(data.sessionId)}`);
-        console.log(`  chartKey:   ${chalk.cyan(data.chartKey)}`);
-        console.log(`  prompt:     ${chalk.gray(data.message)}`);
-        if (data.casting) {
-          console.log(`  casting:    ${chalk.cyan(formatCastingOneLine(data.casting))}`);
-        }
-        if (data.thinking) {
-          console.log(`  thinking:   ${chalk.cyan(`on (${data.angles || 3} angles)`)}`);
-        }
-        if (chart.time?.yearStem) {
-          console.log(`  ${chalk.gray('time:')}      ${chalk.cyan(`${chart.time.yearStem}${chart.time.yearBranch}年 / ${chart.time.monthStem}${chart.time.monthBranch}月 / ${chart.time.dayStem}${chart.time.dayBranch}日 / ${chart.time.hourStem}${chart.time.hourBranch}时`)}`);
-        }
-        console.log(`  palace:    ${chalk.cyan(`${chart.originalHexagram?.palace ?? '?'}宫 · ${chart.originalHexagram?.palaceType ?? '?'} · ${chart.originalHexagram?.element ?? '?'}`)}`);
-        console.log(`  moving:    ${chalk.cyan((chart.movingLines || []).length ? chart.movingLines.join(',') : 'none')}`);
-        console.log();
-        console.log(`  ${chalk.bold('本卦')} ${chart.originalHexagram?.fullName ?? chart.originalHexagram?.name ?? '?'}` +
-                    `     ${chalk.bold('变卦')} ${chalk.cyan(chart.changedHexagram?.fullName ?? chart.changedHexagram?.name ?? '?')}`);
-        renderHexagramPair(chart);
+        renderDivinationReading(data);
         console.log();
         console.log(data.content || '(no analysis content)');
         if (opts.debug && data.debug) renderPipelineTimeline(data.debug);
@@ -799,6 +752,62 @@ function formatCastingOneLine(casting: any): string {
     parts.push(`${casting.meta.upperTrigram}上/${casting.meta.lowerTrigram}下`);
   }
   return parts.join(' · ');
+}
+
+export function renderDivinationReading(data: any): void {
+  const chart = data.chart || data || {};
+  console.log(chalk.green('✓ Full divination flow completed.'));
+  console.log(`  sessionId: ${chalk.cyan(data.sessionId ?? chart.sessionId ?? '?')}`);
+  if (data.chartKey) console.log(`  chartKey:   ${chalk.cyan(data.chartKey)}`);
+  if (data.message) console.log(`  prompt:     ${chalk.gray(data.message)}`);
+  if (data.casting) {
+    console.log(`  casting:    ${chalk.cyan(formatCastingOneLine(data.casting))}`);
+  }
+  if (data.thinking) {
+    console.log(`  thinking:   ${chalk.cyan(`on (${data.angles || 3} angles)`)}`);
+  }
+  if (chart.time?.yearStem) {
+    console.log(`  ${chalk.gray('time:')}      ${chalk.cyan(`${chart.time.yearStem}${chart.time.yearBranch}年 / ${chart.time.monthStem}${chart.time.monthBranch}月 / ${chart.time.dayStem}${chart.time.dayBranch}日 / ${chart.time.hourStem}${chart.time.hourBranch}时`)}`);
+  }
+  console.log(`  palace:    ${chalk.cyan(`${chart.originalHexagram?.palace ?? '?'}宫 · ${chart.originalHexagram?.palaceType ?? '?'} · ${chart.originalHexagram?.element ?? '?'}`)}`);
+  console.log(`  moving:    ${chalk.cyan((chart.movingLines || []).length ? chart.movingLines.join(',') : 'none')}`);
+  console.log();
+  console.log(`  ${chalk.bold('本卦')} ${chart.originalHexagram?.fullName ?? chart.originalHexagram?.name ?? '?'}` +
+              `     ${chalk.bold('变卦')} ${chalk.cyan(chart.changedHexagram?.fullName ?? chart.changedHexagram?.name ?? '?')}`);
+  renderHexagramPair(chart);
+  renderLineDetails(chart);
+}
+
+export function renderLineDetails(data: any): void {
+  if (!Array.isArray(data?.lines)) return;
+  const hasMoving = Array.isArray(data.movingLines) && data.movingLines.length > 0;
+  console.log();
+  console.log(chalk.gray(hasMoving
+    ? '  Lines (初爻→上爻: 纳甲/五行 六亲 六神 | 变爻纳甲/六亲):'
+    : '  Lines (初爻→上爻: 纳甲/五行 六亲 六神):'));
+  for (const l of data.lines) {
+    const voidMark = l.void ? ' [旬空]' : '';
+    const movingMark = l.moving ? chalk.yellow(' 动') : '';
+    const shiYing = [
+      l.isShi ? chalk.red.bold('世') : '',
+      l.isYing ? chalk.magenta.bold('应') : '',
+    ].filter(Boolean).join('/');
+    const marker = shiYing ? ` ${shiYing}` : '';
+    const original = `${formatStemBranchElement(l.stem, l.branch, l.element)} ${l.sixRelative} 临${l.sixGod}${voidMark}${movingMark}${marker}`;
+    if (hasMoving) {
+      const changed = l.changedSixRelative
+        ? `${formatStemBranchElement(l.changedStem, l.changedBranch, l.changedElement)} ${l.changedSixRelative}`
+        : chalk.gray('—');
+      console.log(chalk.gray(`    ${l.position}: ${original}`) + chalk.reset(`  |  变: ${changed}`));
+    } else {
+      console.log(chalk.gray(`    ${l.position}: ${original}`));
+    }
+  }
+}
+
+function formatStemBranchElement(stem: unknown, branch: unknown, element: unknown): string {
+  const sb = `${stem ?? ''}${branch ?? ''}`.trim() || '?';
+  return element ? `${sb}(${element})` : sb;
 }
 
 /** Render the 6 lines of a hexagram (top-to-bottom, traditional order).

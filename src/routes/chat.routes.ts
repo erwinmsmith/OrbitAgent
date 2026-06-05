@@ -116,6 +116,33 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
     provider,
   });
 
+  const existingConversation = await permanentMemory.getConversationBySessionId(session, userId);
+
+  // Hydrate Redis temporary memory from Mongo when the Redis session
+  // is empty. This lets the same user/session keep context across
+  // process restarts or Redis TTL expiry as long as Mongo still has
+  // the permanent conversation.
+  const existingTempMessages = await tempMemory.getMessages(session);
+  if (existingTempMessages.length === 0 && existingConversation) {
+    const persisted = await permanentMemory.getMessages(existingConversation.id, { pageSize: 20 });
+    for (const m of persisted) {
+      await tempMemory.addMessage(session, {
+        userId,
+        sessionId: session,
+        role: m.role as TempMessage['role'],
+        content: m.content,
+        modelId: m.modelId,
+        modelProvider: m.modelProvider,
+        metadata: m.metadata,
+      });
+    }
+    logger.debug(`[Chat] Redis hydrated from Mongo`, {
+      sessionId: session,
+      conversationId: existingConversation.id,
+      messageCount: persisted.length,
+    });
+  }
+
   // Create user message
   const userMsg: Omit<TempMessage, 'id' | 'timestamp'> = {
     userId,
@@ -430,25 +457,35 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
 
   await tempMemory.addMessage(session, assistantMsg);
 
-  // Save to permanent memory (if conversation exists)
+  // Save to permanent memory. Conversations are user-visible history,
+  // so create one on first use instead of relying on a prior explicit
+  // /memory/permanent call.
   const t4 = Date.now();
-  const conversation = await permanentMemory.getConversationBySessionId(session);
-  if (conversation) {
-    await Promise.all([
-      permanentMemory.addMessage(conversation.id, {
-        role: 'user',
-        content: trimmedMessage,
-        modelId: model,
-        modelProvider: provider,
-      }),
-      permanentMemory.addMessage(conversation.id, {
-        role: 'assistant',
-        content: response.content,
-        modelId: response.model,
-        modelProvider: response.provider,
-      }),
-    ]);
-  }
+  const conversation = existingConversation ??
+    await permanentMemory.createConversation({
+      userId,
+      sessionId: session,
+      agentId: agent?.id || agentId || 'default',
+      modelId: model || response.model,
+      modelProvider: provider || response.provider,
+      title: trimmedMessage.slice(0, 60),
+      tags: ['chat'],
+      isArchived: false,
+    });
+  await Promise.all([
+    permanentMemory.addMessage(conversation.id, {
+      role: 'user',
+      content: trimmedMessage,
+      modelId: model,
+      modelProvider: provider,
+    }),
+    permanentMemory.addMessage(conversation.id, {
+      role: 'assistant',
+      content: response.content,
+      modelId: response.model,
+      modelProvider: response.provider,
+    }),
+  ]);
   logger.debug(`[Chat] MongoDB save done`, {
     durationMs: Date.now() - t4,
     sessionId: session,
@@ -712,6 +749,13 @@ router.post('/:sessionId/clear', asyncHandler(async (req: Request, res: Response
 // Delete session
 router.delete('/:sessionId', asyncHandler(async (req: Request, res: Response) => {
   const { sessionId } = req.params;
+  const userId = req.user?.userId || req.apiKey?.userId;
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      error: { code: 'UNAUTHORIZED', message: 'User ID required' },
+    });
+  }
 
   const tempMemory = getTemporaryMemory();
   const permanentMemory = getPermanentMemory();
@@ -720,7 +764,7 @@ router.delete('/:sessionId', asyncHandler(async (req: Request, res: Response) =>
   await tempMemory.clearMessages(sessionId);
 
   // Delete from permanent memory
-  const conversation = await permanentMemory.getConversationBySessionId(sessionId);
+  const conversation = await permanentMemory.getConversationBySessionId(sessionId, userId);
   if (conversation) {
     await permanentMemory.deleteConversation(conversation.id);
   }
