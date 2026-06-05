@@ -204,10 +204,16 @@ orbit login --dev
 | 指令 | 作用 |
 |---|---|
 | `orbit divination cast <b1> ... <b6>` | 只做 6 个 `0/1` bit 的起卦归一，输出 CastResult |
+| `orbit divination cast-method coins` | 自动摇卦：模拟三枚硬币摇六次，输出 6 个爻值 |
+| `orbit divination cast-method time` | 按时间起卦，输出上卦、下卦、动爻和 6 个爻值 |
+| `orbit divination cast-method numbers 2 9 5` | 三数起卦，第 1 数取上卦、第 2 数取下卦、第 3 数取动爻 |
+| `orbit divination cast-method character 财` | 汉字起卦，优先用现代笔画数，查不到用 Unicode 兜底 |
 | `orbit divination chart [bits...]` | 生成完整 ChartResult，并存入 session |
 | `orbit divination chart --yao <v1> ... <v6>` | 用 `6/7/8/9` 爻值排盘，支持动爻 |
+| `orbit divination chart --method coins` | 使用结构化起卦方式排盘并存入 session |
 | `orbit divination ask [bits...]` | 完整流程：起卦、排盘、保存、默认调用六爻 Agent 解卦 |
 | `orbit divination ask --yao <v1> ... <v6> -q <question>` | 用动爻输入直接生成 RAG 解卦报告 |
+| `orbit divination ask --method numbers --numbers 2 9 5 -q <question>` | 三数起卦后直接 RAG 解卦 |
 | `orbit divination brief --session <id>` | 读取结构化 ChartBrief，不调用 LLM |
 | `orbit divination brief --session <id> --json` | 输出完整 JSON brief |
 | `orbit divination analyze <chart.json>` | 读取本地 chart JSON 并直接跑分析 Agent |
@@ -228,6 +234,9 @@ orbit login --dev
 | `--timezone <tz>` | 指定时区，例如 `Asia/Shanghai` |
 | `-s, --session <id>` | 保存卦盘的 session id |
 | `--chart-key <key>` | 同一 session 下的卦盘名称，默认 `default` |
+| `--method <method>` | 起卦方式：`manual`、`coins`、`time`、`numbers`、`character`；`auto` 等同随机三币 |
+| `--numbers <a> <b> <c>` | `--method numbers` 的三数输入 |
+| `--char <汉字>` | `--method character` 的单字输入 |
 | `--yao` | 把 6 个位置参数解释为 `6/7/8/9` 爻值，而不是 `0/1` bits |
 
 `ask` 额外参数：
@@ -282,6 +291,28 @@ orbit divination ask --yao 7 8 7 9 7 8 \
   --angles 4 \
   --debug
 ```
+
+使用函数化起卦入口：
+
+```bash
+# 只查看起卦归一结果，不排盘、不调用 LLM
+orbit divination cast-method coins
+orbit divination cast-method time --datetime "2026-06-04T18:45:00+08:00" --timezone Asia/Shanghai
+orbit divination cast-method numbers 2 9 5
+orbit divination cast-method character 财
+
+# 起卦 → 排盘 → RAG 解卦，一步完成
+orbit divination ask --method coins -q "这笔投资能不能赚钱？"
+orbit divination ask --method time -q "此刻问这件事能成吗？"
+orbit divination ask --method numbers --numbers 2 9 5 -q "这个 offer 是否值得接受？"
+orbit divination ask --method character --char 财 -q "最近财运如何？"
+
+# 结构化起卦同样支持 thinking 多角度分析
+orbit divination ask --method coins -q "这笔投资能不能赚钱？" --thinking --angles 4
+orbit divination ask --method character --char 财 -q "最近财运如何？" --thinking --angles 4 --debug
+```
+
+`--thinking` 会复用同一张排盘，从用神、世应、时间、动变、古例等角度分别 RAG 检索和分析，再综合成最终回答。`--debug` 只用于审计 pipeline 和引用；不加 `--debug` 时默认不展示引用信息。
 
 查看多阶段 pipeline：
 
@@ -492,6 +523,18 @@ orbit divination chart --yao 7 7 9 7 7 7 --session sess_moving_3
 orbit divination chart --yao 6 8 8 8 8 8 --session sess_moving_1
 ```
 
+除了手动输入，服务端还支持结构化 `casting`，这些都是程序函数生成，不交给 Agent 随机发挥：
+
+| 起卦方式 | CLI method | 生成逻辑 | 动爻 |
+|---|---|---|---|
+| 手动输入 | `manual` | 直接接收 `bits` 或 `yaoValues` | 取决于输入 |
+| 自动摇卦 | `coins` / `auto` | 六次模拟三枚硬币；正=3，反=2；每次和数即 `6/7/8/9` | 可能多个 |
+| 时间起卦 | `time` | 公历年+月+日取上卦；再加时辰数取下卦和动爻；先天八卦数 | 1 个 |
+| 数字起卦 | `numbers` | 三数法：第 1 数取上卦，第 2 数取下卦，第 3 数取动爻 | 1 个 |
+| 汉字起卦 | `character` | 单字现代笔画数取上卦；笔画+时辰取下卦；笔画+日数+时辰取动爻；查不到笔画用 Unicode 码点 | 1 个 |
+
+先天八卦数固定为：`1=乾`、`2=兑`、`3=离`、`4=震`、`5=巽`、`6=坎`、`7=艮`、`8=坤`。时间和汉字起卦默认时区为 `Asia/Shanghai`，也可以通过 `--timezone` 或 API 字段指定。
+
 ### 4. 使用 REST API
 
 开发环境可以直接拿 dev token：
@@ -566,6 +609,46 @@ curl -X POST http://localhost:3000/api/v1/divination/ask \
   }'
 ```
 
+结构化起卦 API：
+
+```bash
+# 只起卦，不排盘
+curl -X POST http://localhost:3000/api/v1/divination/cast \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{ "casting": { "method": "numbers", "numbers": [2, 9, 5] } }'
+
+# 起卦 + 排盘
+curl -X POST http://localhost:3000/api/v1/divination/chart \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sessionId": "sess_api_casting",
+    "casting": { "method": "character", "character": "财" },
+    "datetime": "2026-06-04T18:45:00+08:00",
+    "timezone": "Asia/Shanghai",
+    "question": "最近财运如何？"
+  }'
+```
+
+`casting.method` 支持 `manual`、`coins`、`time`、`numbers`、`character`；`auto` 是 `coins` 的别名。`/divination/chart` 和 `/divination/ask` 都会先把 `casting` 归一为 `yaoValues`，再调用同一套排盘和解卦逻辑。响应会返回 `casting` 元数据，便于复盘上卦、下卦、动爻、笔画数、时辰数或铜钱结果。
+
+结构化起卦也可以直接开启多角度解卦：
+
+```bash
+curl -X POST http://localhost:3000/api/v1/divination/ask \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sessionId": "sess_api_casting_thinking",
+    "casting": { "method": "coins" },
+    "question": "这笔投资能不能赚钱？",
+    "thinking": true,
+    "angles": 4,
+    "debug": true
+  }'
+```
+
 默认情况下，`/divination/ask` 的 `content` 是给终端和前端直接展示的干净正文，不包含 `## 引用`，也不显示 `[cite: ...]`。如果请求里传 `debug: true`，`content` 会保留引用信息，并额外返回 `debug.pipeline`、`debug.rag`、`debug.perAngle` 等审计数据。
 
 `/divination/ask` 始终返回 `sessionId`、`chart`、`report`、`brief`、`content`；`debug` 只在 `debug: true` 时返回。服务端会把默认提示词和最终报告写入临时 chat memory，所以之后可以继续追问：
@@ -597,7 +680,7 @@ curl -X POST http://localhost:3000/api/v1/divination/rag/upload \
 | `POST` | `/dev/token` | 开发环境获取 JWT |
 | `POST` | `/auth/register` | 注册用户 |
 | `POST` | `/auth/login` | 登录获取 JWT |
-| `POST` | `/divination/cast` | 只做 6 bits 起卦归一 |
+| `POST` | `/divination/cast` | 起卦归一：兼容 6 bits，也支持 `casting` 结构化起卦 |
 | `POST` | `/divination/chart` | 生成完整 ChartResult，并保存到 ChartStore |
 | `POST` | `/divination/ask` | 完整流程：起卦、排盘、保存、默认提示词解卦、写入 chat 临时记忆 |
 | `GET` | `/divination/brief/:sessionId` | 读取结构化 ChartBrief，不调用 LLM |
@@ -836,7 +919,7 @@ CLI 渲染样例（`orbit chat --thinking --debug`）：
 
 | 内容 | 建议 |
 |---|---|
-| 起卦归一化 | 已有 `castSkill`，继续扩展三币、时间、数字、汉字起卦输入 |
+| 起卦归一化 | 已有 `castSkill` 和 `src/liuyao/casting/methods.ts`，三币、时间、数字、汉字都保持函数化，不做成 Agent skill |
 | 日历四柱 | 已有 `calendarSkill`，需要补更严格的节气边界测试 |
 | 64 卦识别 | 已有 `hexagramSkill`，保持表驱动和 snapshot 测试 |
 | 八宫、世应 | 已有 `palaceSkill`，不交给 LLM |
@@ -903,7 +986,8 @@ CLI 渲染样例（`orbit chat --thinking --debug`）：
 
 ### P2：Skill 化和函数化
 
-- 把“三币起卦”“数字起卦”“时间起卦”“汉字起卦”做成结构化输入 skill，而不是散落在 CLI 或前端。
+- 继续扩展“三币起卦”“数字起卦”“时间起卦”“汉字起卦”的函数化结构化输入，不散落在 CLI 或前端，也不让 Agent 自行起卦。
+- 为 `src/liuyao/casting/methods.ts` 补笔画字典、农历时间起卦变体、可配置取数规则和 API schema 文档。
 - 把“问题类型分类 -> 用神候选 -> RAG query 生成”拆为可测试 pipeline，减少 LLM 随机性。
 - 把“断语风险控制”做成 Agent skill：禁止绝对承诺、医疗/投资/法律场景必须加不确定性说明。
 - 把“报告结构化输出”从纯 markdown 推进到 JSON schema + markdown render 双输出。

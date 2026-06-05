@@ -84,6 +84,29 @@ export function registerDivination(program: Command): void {
       } catch (err: any) { console.error(chalk.red(`✗ ${err.message}`)); process.exit(1); }
     });
 
+  cmd.command('cast-method <method> [values...]')
+    .description('Normalize a casting method into six yaoValues. Methods: coins(auto/random), time, numbers, character, manual.')
+    .option('--numbers <values...>', 'Three numbers for numbers casting. You may also pass them as positional values.')
+    .option('--char <c>', 'One Han character for character casting. You may also pass it as the first positional value.')
+    .option('--datetime <iso>', 'Datetime used by time/character casting. Defaults to now on the server.')
+    .option('--timezone <tz>', 'IANA timezone used by time/character casting. Default: Asia/Shanghai.')
+    .option('--yao', 'For manual casting, interpret positional values as 6/7/8/9 instead of 0/1 bits.', false)
+    .option('--json', 'Print raw JSON response.', false)
+    .action(async (method: string, values: string[] | undefined, opts) => {
+      try {
+        const body = buildCastingRequest(method, values ?? [], opts);
+        const data = await apiPost<any>('/divination/cast', body);
+        if (opts.json) {
+          console.log(JSON.stringify(data, null, 2));
+          return;
+        }
+        renderCastingSummary(data);
+      } catch (err: any) {
+        console.error(chalk.red(`✗ ${err.message}`));
+        process.exit(1);
+      }
+    });
+
   cmd.command('chart [bits...]')
     .description('Run the full chart assembler AND persist it to the session store. Positional args are 6 × 0/1 (static yin/yang) by default. Pass --yao to switch to 6 × 6/7/8/9 (supports moving lines 6 and 9). If you don\'t pass --day-stem / --day-branch, they are auto-derived from --datetime (or "now" if omitted) using lunar-typescript.')
     .option('-q, --question <q>', 'Question text (used for 用神 + analysis)')
@@ -95,10 +118,14 @@ export function registerDivination(program: Command): void {
     .option('--timezone <tz>', 'IANA timezone for the calendar skill (e.g. Asia/Shanghai). Defaults to system local.')
     .option('-s, --session <id>', 'Session id under which to store the chart (auto-generated if omitted; pass the same value to `orbit chat` later)')
     .option('--chart-key <k>', 'Logical name for this chart within the session (default: "default")', 'default')
+    .option('--method <m>', 'Casting method: manual|coins|time|numbers|character. Alias auto=random coins.')
+    .option('--numbers <values...>', 'Three numbers for --method numbers.')
+    .option('--char <c>', 'One Han character for --method character.')
     .option('--yao', 'Interpret the 6 positional args as 6/7/8/9 爻值 (with moving lines) instead of 0/1 bits.', false)
     .action(async (bits: string[] | undefined, opts) => {
       bits = bits ?? [];
-      if (bits.length === 0) {
+      const usesStructuredCasting = shouldUseStructuredCasting(opts, bits);
+      if (!usesStructuredCasting && bits.length === 0) {
         console.error(chalk.red(
           `✗ missing 6 positional args.\n` +
           `  Examples:\n` +
@@ -109,7 +136,9 @@ export function registerDivination(program: Command): void {
       }
       const sessionId = opts.session || `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const body: any = { sessionId, chartKey: opts.chartKey };
-      if (opts.yao) {
+      if (usesStructuredCasting) {
+        Object.assign(body, buildCastingRequest(opts.method, bits, opts));
+      } else if (opts.yao) {
         const yaoArr = parseSixYao(bits);
         body.yaoValues = yaoArr;
       } else {
@@ -145,6 +174,9 @@ export function registerDivination(program: Command): void {
         console.log(chalk.green(`✓ Chart assembled and stored.`));
         console.log(`  sessionId: ${chalk.cyan(sessionId)}`);
         console.log(`  chartKey:   ${chalk.cyan(opts.chartKey)}`);
+        if (data.casting) {
+          console.log(`  casting:    ${chalk.cyan(formatCastingOneLine(data.casting))}`);
+        }
         console.log(`  palace:     ${chalk.cyan(`${data.originalHexagram?.palace ?? '?'}宫 · ${data.originalHexagram?.palaceType ?? '?'} · ${data.originalHexagram?.element ?? '?'}`)}`);
         console.log(`  shi/ying:   ${chalk.cyan(`${data.lines?.find((l: any) => l.isShi)?.position ?? '?'}/${data.lines?.find((l: any) => l.isYing)?.position ?? '?'}`)}`);
         const moving = (data.movingLines as number[]) || [];
@@ -202,6 +234,9 @@ export function registerDivination(program: Command): void {
     .option('--timezone <tz>', 'IANA timezone for the calendar skill (e.g. Asia/Shanghai).')
     .option('-s, --session <id>', 'Session id for storing the chart and chat turn (auto-generated if omitted)')
     .option('--chart-key <k>', 'Logical name for this chart within the session (default: "default")', 'default')
+    .option('--method <m>', 'Casting method: manual|coins|time|numbers|character. Alias auto=random coins.')
+    .option('--numbers <values...>', 'Three numbers for --method numbers.')
+    .option('--char <c>', 'One Han character for --method character.')
     .option('--yao', 'Interpret positional args as 6/7/8/9 爻值 instead of 0/1 bits.', false)
     .option('--message <text>', 'Chat prompt sent after charting', '请结合卦象分析、解答问题')
     .option('--thinking', 'Enable multi-angle thinking mode (slower, more thorough, more tokens).', false)
@@ -210,7 +245,8 @@ export function registerDivination(program: Command): void {
     .option('--json', 'Print raw JSON response instead of the formatted report.', false)
     .action(async (bits: string[] | undefined, opts) => {
       bits = bits ?? [];
-      if (bits.length === 0) {
+      const usesStructuredCasting = shouldUseStructuredCasting(opts, bits);
+      if (!usesStructuredCasting && bits.length === 0) {
         console.error(chalk.red(
           `✗ missing 6 positional args.\n` +
           `  Examples:\n` +
@@ -226,7 +262,8 @@ export function registerDivination(program: Command): void {
         message: opts.message,
         debug: !!opts.debug,
       };
-      if (opts.yao) body.yaoValues = parseSixYao(bits);
+      if (usesStructuredCasting) Object.assign(body, buildCastingRequest(opts.method, bits, opts));
+      else if (opts.yao) body.yaoValues = parseSixYao(bits);
       else body.bits = parseSixBits(bits);
       if (opts.question) body.question = opts.question;
       if (opts.questionType) body.questionType = opts.questionType;
@@ -252,6 +289,9 @@ export function registerDivination(program: Command): void {
         console.log(`  sessionId: ${chalk.cyan(data.sessionId)}`);
         console.log(`  chartKey:   ${chalk.cyan(data.chartKey)}`);
         console.log(`  prompt:     ${chalk.gray(data.message)}`);
+        if (data.casting) {
+          console.log(`  casting:    ${chalk.cyan(formatCastingOneLine(data.casting))}`);
+        }
         if (data.thinking) {
           console.log(`  thinking:   ${chalk.cyan(`on (${data.angles || 3} angles)`)}`);
         }
@@ -673,6 +713,92 @@ function parseSixYao(values: string[]): [6 | 7 | 8 | 9, 6 | 7 | 8 | 9, 6 | 7 | 8
     out[i] = v as any;
   }
   return out;
+}
+
+function shouldUseStructuredCasting(opts: any, values: string[]): boolean {
+  if (opts.method || opts.numbers || opts.char) return true;
+  if (values.length === 0) return false;
+  return ['coins', 'coin', 'auto', 'random', 'time', 'datetime', 'date', 'numbers', 'number', 'num', 'character', 'char', 'hanzi', 'text']
+    .includes(String(opts.method || '').toLowerCase());
+}
+
+function buildCastingRequest(method: string | undefined, values: string[], opts: any): any {
+  const normalizedMethod = method || inferCastingMethod(values, opts);
+  const body: any = {
+    casting: {
+      method: normalizedMethod,
+    },
+  };
+  if (opts.datetime) body.datetime = opts.datetime;
+  if (opts.timezone) body.timezone = opts.timezone;
+
+  const methodKey = String(normalizedMethod || 'manual').toLowerCase();
+  if (['numbers', 'number', 'num'].includes(methodKey)) {
+    const raw = opts.numbers ?? values;
+    body.casting.numbers = parseNumberList(raw, 3, 'numbers casting requires exactly 3 numbers');
+  } else if (['character', 'char', 'hanzi', 'text'].includes(methodKey)) {
+    body.casting.character = opts.char ?? values[0];
+    if (!body.casting.character) throw new Error('character casting requires --char <汉字> or one positional value');
+  } else if (['manual', 'input', 'direct'].includes(methodKey)) {
+    if (opts.yao) body.casting.yaoValues = parseSixYao(values);
+    else body.casting.bits = parseSixBits(values);
+  } else if (['coins', 'coin', 'auto', 'random', 'time', 'datetime', 'date'].includes(methodKey)) {
+    // No extra CLI input is required for random coins or time casting.
+  } else {
+    throw new Error(`unknown casting method "${normalizedMethod}"`);
+  }
+  return body;
+}
+
+function inferCastingMethod(values: string[], opts: any): string {
+  if (opts.numbers) return 'numbers';
+  if (opts.char) return 'character';
+  if (values.length > 0) return 'manual';
+  return 'coins';
+}
+
+function parseNumberList(values: unknown, expected: number, errorMessage: string): number[] {
+  const raw = Array.isArray(values)
+    ? values
+    : typeof values === 'string'
+      ? values.split(/[,\s]+/).filter(Boolean)
+      : [];
+  if (raw.length !== expected) throw new Error(errorMessage);
+  const ns = raw.map((v) => Number(v));
+  if (ns.some((n) => !Number.isFinite(n))) throw new Error('numbers must be finite');
+  return ns.map((n) => Math.trunc(n));
+}
+
+function renderCastingSummary(data: any): void {
+  const casting = data.cast ? data : data.casting ?? data;
+  console.log(chalk.green('✓ Casting normalized.'));
+  console.log(`  method:     ${chalk.cyan(casting.method)}`);
+  console.log(`  yaoValues:  ${chalk.cyan((casting.yaoValues || []).join(' '))}`);
+  console.log(`  moving:     ${chalk.cyan((casting.movingLines || []).length ? casting.movingLines.join(',') : 'none')}`);
+  if (casting.meta) {
+    const meta = casting.meta;
+    if (meta.rule) console.log(`  rule:       ${chalk.gray(meta.rule)}`);
+    if (meta.upperTrigram || meta.lowerTrigram) {
+      console.log(`  trigrams:   ${chalk.cyan(`${meta.upperTrigram}上 / ${meta.lowerTrigram}下`)}  ${chalk.gray(`动爻=${meta.movingLine}`)}`);
+    }
+    if (Array.isArray(meta.throws)) {
+      console.log(`  throws:     ${meta.throws.map((t: string[]) => t.join('')).join(' / ')}`);
+    }
+    if (meta.character) {
+      console.log(`  character:  ${chalk.cyan(meta.character)}  ${chalk.gray(`basis=${meta.basis} (${meta.basisSource})`)}`);
+    }
+  }
+}
+
+function formatCastingOneLine(casting: any): string {
+  const parts = [
+    casting.method,
+    Array.isArray(casting.yaoValues) ? casting.yaoValues.join(' ') : '',
+  ].filter(Boolean);
+  if (casting.meta?.upperTrigram || casting.meta?.lowerTrigram) {
+    parts.push(`${casting.meta.upperTrigram}上/${casting.meta.lowerTrigram}下`);
+  }
+  return parts.join(' · ');
 }
 
 /** Render the 6 lines of a hexagram (top-to-bottom, traditional order).

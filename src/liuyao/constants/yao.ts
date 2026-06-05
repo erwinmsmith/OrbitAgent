@@ -1,22 +1,20 @@
 /**
  * Coarse yao (爻) value handling — the 4 values 6,7,8,9 that come out
- * of three coin throws (sum of 0=back, 1=face). Pure procedural logic,
+ * of three coin throws (正=3, 反=2). Pure procedural logic,
  * no external data.
  */
 import type { YaoValue, YinYang, YinYangBit, LinePosition } from '../types/basic';
 
-/** A single 3-coin throw (0 = back, 1 = face), mapped to a YaoValue. */
+/** A single 3-coin throw, mapped to a YaoValue. */
 export function coinToYaoValue(back: number, face: number): YaoValue {
-  if (back < 0 || back < 0) throw new Error('coin counts must be non-negative');
+  if (back < 0 || face < 0) throw new Error('coin counts must be non-negative');
   if (back + face !== 3) throw new Error(`expected 3 coins, got ${back + face}`);
-  // Standard 火珠林 (Liu Yi) rules:
-  //   1 back, 2 face  = "单"  = 少阳 = 7
-  //   2 back, 1 face  = "拆"  = 少阴 = 8
-  //   3 back, 0 face  = "重"  = 老阳 = 9 (moving)
-  //   0 back, 3 face  = "交"  = 老阴 = 6 (moving)
-  if (back === 3) return 9;
-  if (back === 0) return 6;
-  if (back === 1) return 7;
+  // Project rule: 正=3，反=2. Sum maps directly to the yao value:
+  //   反反反 = 6 老阴，正反反 = 7 少阳，
+  //   正正反 = 8 少阴，正正正 = 9 老阳。
+  if (back === 3) return 6;
+  if (face === 3) return 9;
+  if (face === 1) return 7;
   return 8;
 }
 

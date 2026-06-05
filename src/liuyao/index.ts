@@ -7,6 +7,7 @@ export * from './types/chart';
 export * from './types/skill';
 export * from './types/agent';
 export * as constants from './constants';
+export * as casting from './casting/methods';
 export * as skills from './skills/castSkill';
 export { hexagramSkill } from './skills/hexagramSkill';
 export { palaceSkill } from './skills/palaceSkill';

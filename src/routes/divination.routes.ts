@@ -8,7 +8,8 @@
  * in the log.
  *
  * Routes:
- *   POST /cast                  — 6 raw bits → CastResult
+ *   POST /cast                  — structured casting methods or 6 raw
+ *                                 bits → normalized yaoValues/CastResult
  *   POST /chart                 — full chart; also PERSISTS to ChartStore
  *                                 under (userId, sessionId, chartKey)
  *   POST /ask                   — complete flow: chart + store + default
@@ -47,6 +48,7 @@ import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import { castSkill } from '../liuyao/skills/castSkill';
 import { assembleChart, type AssembleInput } from '../liuyao/skills/chartAssembler';
+import { resolveCasting, type CastingResult } from '../liuyao/casting/methods';
 import { runAnalysisAgent } from '../liuyao/agent/analysisAgent';
 import { buildChartBrief } from '../liuyao/agent/chartBrief';
 import type { AnalysisReport } from '../liuyao/types/agent';
@@ -85,12 +87,12 @@ function normalizeSessionId(sessionId: unknown): string {
   return sessionId.trim().replace(/\s+/g, '_');
 }
 
-function buildAssembleInput(body: any): AssembleInput {
+function buildAssembleInput(body: any, casting: CastingResult | null = resolveCastingForBody(body)): AssembleInput {
   return {
     question: body.question,
     questionType: body.questionType,
-    bits: body.bits,
-    yaoValues: body.yaoValues,
+    bits: casting ? undefined : body.bits,
+    yaoValues: casting ? casting.yaoValues : body.yaoValues,
     dayStem: body.dayStem,
     dayBranch: body.dayBranch,
     monthBranch: body.monthBranch,
@@ -99,6 +101,34 @@ function buildAssembleInput(body: any): AssembleInput {
     datetime: body.datetime,
     timezone: body.timezone,
   };
+}
+
+function resolveCastingForBody(body: any): CastingResult | null {
+  if (!body || typeof body !== 'object') return null;
+  const nested = body.casting && typeof body.casting === 'object' ? body.casting : {};
+  const method = nested.method ?? body.castMethod ?? body.method ??
+    (nested.coins != null || body.coins != null ? 'coins' : undefined) ??
+    (nested.numbers != null || body.numbers != null ? 'numbers' : undefined) ??
+    (nested.character != null || body.character != null || nested.text != null || body.text != null ? 'character' : undefined);
+  const hasStructuredInput = method != null ||
+    body.coins != null || body.numbers != null || body.character != null || body.text != null ||
+    nested.coins != null || nested.numbers != null || nested.character != null || nested.text != null;
+  if (!hasStructuredInput) return null;
+  try {
+    return resolveCasting({
+      method,
+      bits: nested.bits ?? body.bits,
+      yaoValues: nested.yaoValues ?? body.yaoValues,
+      coins: nested.coins ?? body.coins,
+      numbers: nested.numbers ?? body.numbers,
+      character: nested.character ?? body.character,
+      text: nested.text ?? body.text,
+      datetime: nested.datetime ?? body.datetime,
+      timezone: nested.timezone ?? body.timezone,
+    });
+  } catch (err: any) {
+    throw new AppError('VALIDATION_ERROR', err.message ?? String(err), HTTP_STATUS.BAD_REQUEST);
+  }
 }
 
 function validateCastInput(input: AssembleInput): void {
@@ -187,7 +217,14 @@ function formatCitationDisplay(markdown: string, options: { showCitations: boole
 
 // ─── POST /cast ───────────────────────────────────────────────────────
 router.post('/cast', asyncHandler(async (req: Request, res: Response) => {
-  const { bits, interpretation } = req.body || {};
+  const body = req.body || {};
+  const casting = resolveCastingForBody(body);
+  if (casting) {
+    const cast = castSkill({ yaoValues: casting.yaoValues });
+    res.json({ success: true, data: { ...casting, cast } });
+    return;
+  }
+  const { bits, interpretation } = body;
   if (!Array.isArray(bits) || bits.length !== 6) {
     throw new AppError('VALIDATION_ERROR', 'bits must be an array of 6 entries (0 or 1)', HTTP_STATUS.BAD_REQUEST);
   }
@@ -211,7 +248,8 @@ router.post('/chart', asyncHandler(async (req: Request, res: Response) => {
       'sessionId is required — the chart is persisted under it so the liuyao agent can read it later',
       HTTP_STATUS.BAD_REQUEST);
   }
-  const input = buildAssembleInput(body);
+  const casting = resolveCastingForBody(body);
+  const input = buildAssembleInput(body, casting);
   // Accept either bits (6 × 0/1, static) or yaoValues (6 × 6/7/8/9,
   // supports moving lines). The castSkill will throw a clear error
   // if neither is provided or if both are.
@@ -226,6 +264,7 @@ router.post('/chart', asyncHandler(async (req: Request, res: Response) => {
       sessionId,
       chartKey,
       expiresAt: stored.expiresAt,
+      casting,
       _note: 'Stored in ChartStore (Mongo); the liuyao agent will read it on /chat.',
     },
   });
@@ -245,7 +284,8 @@ router.post('/ask', asyncHandler(async (req: Request, res: Response) => {
     ? body.message.trim()
     : DEFAULT_DIVINATION_CHAT_PROMPT;
   const { debug, thinking, angles } = parseAnalysisOptions(body);
-  const input = buildAssembleInput(body);
+  const casting = resolveCastingForBody(body);
+  const input = buildAssembleInput(body, casting);
   validateCastInput(input);
 
   const chart = assembleChart(input);
@@ -290,6 +330,7 @@ router.post('/ask', asyncHandler(async (req: Request, res: Response) => {
       thinking,
       angles: thinking ? angles : undefined,
       content,
+      casting,
       chart,
       report: analysis.report,
       brief: analysis.brief,

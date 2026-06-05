@@ -40,17 +40,18 @@ describe('castSkill (raw 6/7/8/9 yaoValues)', () => {
 });
 
 describe('threeCoinsToYaoValue (火珠林)', () => {
-  it('3 backs → 9 (old yang, moving)', () => {
-    expect(threeCoinsToYaoValue([0, 0, 0])).toBe(9);
+  it('3 backs → 6 (old yin, moving)', () => {
+    expect(threeCoinsToYaoValue([0, 0, 0])).toBe(6);
   });
-  it('3 faces → 6 (old yin, moving)', () => {
-    expect(threeCoinsToYaoValue([1, 1, 1])).toBe(6);
+  it('3 faces → 9 (old yang, moving)', () => {
+    expect(threeCoinsToYaoValue([1, 1, 1])).toBe(9);
   });
-  it('1 back → 7 (少阳, static)', () => {
-    expect(threeCoinsToYaoValue([0, 1, 1])).toBe(7);
+  it('1 face → 7 (少阳, static)', () => {
+    expect(threeCoinsToYaoValue([0, 0, 1])).toBe(7);
   });
-  it('2 backs → 8 (少阴, static)', () => {
-    expect(threeCoinsToYaoValue([0, 0, 1])).toBe(8);
+  it('2 faces → 8 (少阴, static)', () => {
+    expect(threeCoinsToYaoValue([0, 1, 1])).toBe(8);
+    expect(threeCoinsToYaoValue([1, 1, 0])).toBe(8);
   });
 });
 
