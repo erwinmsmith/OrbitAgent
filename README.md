@@ -376,7 +376,7 @@ echo "请总结这个报告" | orbit chat --agent generic
 
 #### 2.3.1 交互式六爻 CLI 应用
 
-`orbit liuyao` 是一个类似 Claude Code 的对话式六爻 CLI 应用，CLI 中的 Agent 展示名是 **Roy**。它不是把系统日志、排盘和报告混在一起输出，而是按「状态栏 → 工具执行块 → 排盘摘要 → Roy 回复」组织界面。新卦会调用 `/divination/ask`，追问会调用 `/chat`，并复用同一个 `sessionId`、Mongo permanent memory 和已保存卦盘。
+`orbit liuyao` 是一个基于 **Ink** 的六爻 TUI 应用，CLI 中的 Agent 展示名是 **Roy**。它按「像素风三铜钱 Logo → 产品信息/注意事项 → 状态栏 → 工具执行块 → 排盘摘要 → Roy 流式回复」组织界面。新卦会调用 `/divination/ask` 生成完整报告，再调用 `/divination/summarize/stream` 由 LLM 生成交互式短答；追问会走 `/chat/stream`，并复用同一个 `sessionId`、Mongo permanent memory 和已保存卦盘。
 
 ```bash
 orbit liuyao                                # 启动后选择起卦方式，回车默认自动摇卦
@@ -389,59 +389,64 @@ orbit liuyao --method coins --thinking --angles 4
 orbit liuyao --no-rag-check                 # 跳过启动知识库检查
 ```
 
-启动时会先展示核心命令，随后列出最近会话：
+`orbit liuyao` 需要 TTY 终端。非交互脚本请使用 `orbit divination ask --method coins -q "问题"`。
+
+启动时会先展示像素风三铜钱 Logo、产品信息、核心命令和注意事项。历史会话不会默认刷屏，需要通过 `/sessions` 调出：
 
 ```text
-╭────────────────────────────────────────────────────────────╮
-│ Orbit Liuyao · Roy                                         │
-│ 六爻排盘 · RAG 解卦 · 多轮追问                               │
-╰────────────────────────────────────────────────────────────╯
-Session: new
-Mode: 自动摇卦 · coins
-Memory: enabled
-RAG: enabled
-
-╭─ Commands ─────────────────────────────────────────────────╮
-│ /new  /chart  /why  /rag  /tools  /sessions  /help  /exit   │
-│ /chart full 展开完整卦画与六爻表；/rag check 手动检查知识库。 │
-╰────────────────────────────────────────────────────────────╯
-
-选择会话 [new] >
+  ▓▓▓      ▓▓▓      ▓▓▓
+ ▓   ▓    ▓   ▓    ▓   ▓
+ ▓ ░ ▓    ▓ ░ ▓    ▓ ░ ▓
+ ▓   ▓    ▓   ▓    ▓   ▓
+  ▓▓▓      ▓▓▓      ▓▓▓
+Orbit Liuyao · Roy
+六爻排盘 · RAG 解卦 · 多轮追问 · Ink TUI
+Commands: /new  /method  /sessions  /chart  /why  /rag  /tools  /help  /exit
+注意：占断结果仅供参考；重大健康、法律、投资决策请以专业意见为准。
 ```
 
-进入对话后，如果没有传 `--method`，Roy 会先让你选择起卦方式：
+进入对话后，界面会保持固定的 `Status`、`Flow` 和底部 `Input`。轻量交互用单行 `你 >` / `Roy >`，只有排盘、检索、答案、会话管理等重信息才会用卡片。
+
+如果没有传 `--method`，Roy 会先让你选择起卦方式：
 
 ```text
-╭─ Roy · Liuyao ─────────────────────────────────────────────╮
-│ session: new                                               │
-│ method: coins    chart: none    rag: on    memory: on      │
-│ thinking: off                                              │
-╰────────────────────────────────────────────────────────────╯
-
-Roy > 请选择起卦方式：
-      [1] 手动六爻
-      [2] 自动摇卦
-      [3] 时间起卦
-      [4] 数字起卦
-      [5] 汉字起卦
+╭─ Status ───────────────────────────────────────────────────╮
+│ session: new                                                │
+│ method: coins    chart: none    mode: select_method          │
+│ rag: on    memory: on    thinking: quick    kb: ready        │
+│ Commands: /new  /method  /sessions  /chart  /why  /rag ...  │
+╰─────────────────────────────────────────────────────────────╯
+╭─ Flow ─────────────────────────────────────────────────────╮
+│ ① 方式 ⠋   ② 问题 ·   ③ 推演 ·   ④ 起卦 ·   ⑤ 排盘 · ...    │
+╰─────────────────────────────────────────────────────────────╯
+╭─ Choose method ─────────────────────────────────────────────╮
+│ > [2] 自动摇卦     模拟三枚硬币摇六次，适合标准六爻问事       │
+│   [1] 手动六爻     输入 6 个 6/7/8/9，用于复盘或测试          │
+│   [3] 时间起卦     按当前时间生成上卦、下卦和动爻             │
+│   [4] 数字起卦     输入 3 个数字：上卦、下卦、动爻             │
+│   [5] 汉字起卦     输入 1 个汉字，按笔画/时间取数             │
+╰─────────────────────────────────────────────────────────────╯
 你 > 2
 Roy > 已切换为：自动摇卦 · coins。
-      输入问题后，我会自动完成：起卦 → 排盘 → 检索 → 分析。
-      Commands: /new  /chart  /why  /rag  /tools  /sessions  /help  /exit
 ```
 
-起卦后默认只展示压缩信息：工具执行块、排盘摘要和 Roy 的短结论。完整六爻表、卦画、RAG 来源和详细推理都通过 slash commands 展开。
+起卦后默认展示流程进度、工作状态、排盘摘要、RAG 摘要和 **LLM 生成的流式短答**。这不是硬截断；完整报告仍保存在当前会话里，输入 `/why` 展开。完整六爻表、卦画、RAG 来源和工具调用都通过 slash commands 展开。
 
 ```text
 你 > 这笔投资能赚钱吗
-深度推演？[y/N] > n
+╭─ Analysis mode ─────────────────────────────────────────────╮
+│ [1] 快速分析    直接给结论，适合普通问题                     │
+│ [2] 深度推演    默认 3 angles，可输入 /think 5 调整           │
+│ [3] 只排盘      当前版本会先生成 Chart，不调用短答请用 /chart  │
+│ 默认：[1] 快速分析。也可以直接输入 /think 3。                 │
+╰────────────────────────────────────────────────────────────╯
+你 > /think 4
 
-╭─ Running divination flow ──────────────────────────────────╮
-│ ✓ cast.coins        8 7 8 8 8 7                             │
-│ ✓ chart.assemble    山水蒙 → 山水蒙 · 静卦                   │
-│ ✓ calendar          丙午年 / 甲午月 / 庚戌日 / 癸未时         │
-│ ✓ rag.retrieve      6 chunks                                │
-│ ✓ analyze           brief + detailed                        │
+╭─ Flow ─────────────────────────────────────────────────────╮
+│ ① 方式 ✓   ② 问题 ✓   ③ 推演 ✓   ④ 起卦 ⠋   ⑤ 排盘 · ...    │
+╰────────────────────────────────────────────────────────────╯
+╭─ Working ──────────────────────────────────────────────────╮
+│ ⠋ 摇动三枚铜钱 / 生成起卦结果...                            │
 ╰────────────────────────────────────────────────────────────╯
 
 ╭─ Chart ────────────────────────────────────────────────────╮
@@ -452,6 +457,10 @@ Roy > 已切换为：自动摇卦 · coins。
 │ 动爻：无                                                    │
 │ 世爻：第 4 爻 丙戌(土) 子孙 临朱雀                           │
 │ 应爻：第 1 爻 戊寅(木) 父母 临白虎 旬空                      │
+╰────────────────────────────────────────────────────────────╯
+╭─ RAG ──────────────────────────────────────────────────────╮
+│ ✓ 命中 6 条：世应、用神、动爻、卦象、旬空、六亲               │
+│ 输入 /rag 查看检索依据。                                     │
 ╰────────────────────────────────────────────────────────────╯
 
 Roy >
@@ -470,21 +479,36 @@ Roy >
 
 第一次起卦完成后，普通输入会进入当前 session 的追问模式，不会重新起卦；需要重新起卦时输入 `/new`。
 
+会话管理需要手动调出：
+
+```text
+你 > /sessions
+╭─ Session manager ──────────────────────────────────────────╮
+│ * 1. sess_cli_xxx  求财测试                                │
+│   2. sess_cli_yyy  smoke test                              │
+│ Commands: /use <sessionId>  /delete <sessionId>  /delete all│
+╰────────────────────────────────────────────────────────────╯
+```
+
 交互页命令：
 
 | 命令 | 作用 |
 |---|---|
 | `/new [method]` | 开启新卦；可选 `manual`、`coins`、`time`、`numbers`、`character` |
 | `/method [method]` | 切换下一次新卦的起卦方式 |
+| `/think off` | 切换为快速分析 |
+| `/think 1-5` | 开启深度推演并指定角度数 |
 | `/chart` | 查看当前排盘摘要 |
-| `/chart full` | 展开完整卦画、六爻表、六亲六神、世应、旬空、变爻 |
+| `/chart full` | 展开本卦/变卦卦画、完整六爻表、六亲六神、世应、旬空、变爻 |
 | `/why` | 展开分析摘要和完整报告；不是模型私密推理链 |
 | `/rag` | 查看本轮检索依据，默认不展示 |
 | `/rag check` | 手动检查 `docs/base_knowledge/*.md`，有变化才更新 embedding |
 | `/tools` | 查看本轮工具调用：起卦、排盘、日历、检索、分析 |
 | `/session` | 查看当前会话状态和当前卦上下文 |
-| `/sessions` | 查看当前用户保存在 Mongo 的历史会话 |
+| `/sessions` | 调出当前用户保存在 Mongo 的历史会话管理面板 |
 | `/use <sessionId>` | 切换到已有 session，后续输入作为追问 |
+| `/delete <sessionId>` | 删除某一个历史会话 |
+| `/delete all` | 删除当前用户全部历史会话，需要谨慎使用 |
 | `/history [sessionId]` | 查看当前或指定 session 最近消息 |
 | `/export` | 导出当前报告到本地 markdown |
 | `/clear` | 清屏并重绘当前状态栏 |
@@ -757,6 +781,21 @@ curl -X POST http://localhost:3000/api/v1/divination/ask \
 orbit chat --session sess_api_full "如果我延后一周再答复，会有什么变化？"
 ```
 
+交互式 CLI 的短答不是字符串截断，而是额外调用 LLM summary 接口。非流式调用：
+
+```bash
+curl -X POST http://localhost:3000/api/v1/divination/summarize \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question": "这笔投资能不能赚钱？",
+    "chart": { "...": "ChartResult" },
+    "content": "完整解卦报告正文"
+  }'
+```
+
+流式调用使用 `POST /divination/summarize/stream`，返回 SSE `content` / `done` 事件。
+
 单用户多会话管理使用 memory/chat 接口。`/chat` 会优先读取 Redis；如果 Redis 里没有当前 session，会从 Mongo permanent messages 回填上下文，再继续回答：
 
 ```bash
@@ -766,6 +805,14 @@ curl http://localhost:3000/api/v1/memory/permanent \
 
 # 指定 conversation 的永久消息
 curl http://localhost:3000/api/v1/memory/permanent/<conversationId>/messages \
+  -H "Authorization: Bearer $TOKEN"
+
+# 按 sessionId 删除某一个永久会话
+curl -X DELETE http://localhost:3000/api/v1/memory/permanent/session/sess_api_full \
+  -H "Authorization: Bearer $TOKEN"
+
+# 删除当前用户全部永久会话
+curl -X DELETE "http://localhost:3000/api/v1/memory/permanent?confirm=true" \
   -H "Authorization: Bearer $TOKEN"
 
 # 向指定 session 追问，不重新起卦
@@ -804,6 +851,8 @@ curl -X POST http://localhost:3000/api/v1/divination/rag/upload \
 | `POST` | `/divination/cast` | 起卦归一：兼容 6 bits，也支持 `casting` 结构化起卦 |
 | `POST` | `/divination/chart` | 生成完整 ChartResult，并保存到 ChartStore |
 | `POST` | `/divination/ask` | 完整流程：起卦、排盘、保存、默认提示词解卦、写入 chat 临时记忆 |
+| `POST` | `/divination/summarize` | 将完整解卦报告总结成交互式短答 |
+| `POST` | `/divination/summarize/stream` | SSE 流式输出交互式短答 |
 | `GET` | `/divination/brief/:sessionId` | 读取结构化 ChartBrief，不调用 LLM |
 | `GET` | `/divination/chart/keys/:sessionId` | 查看当前用户在 session 下的 chartKey |
 | `POST` | `/divination/analyze` | 直接分析 chart 或 session 中的最新 chart |
@@ -813,6 +862,8 @@ curl -X POST http://localhost:3000/api/v1/divination/rag/upload \
 | `DELETE` | `/divination/rag/:source` | 删除自己或管理员有权删除的文档 |
 | `POST` | `/chat` | 主对话接口 |
 | `POST` | `/chat/stream` | SSE 流式对话 |
+| `DELETE` | `/memory/permanent/session/:sessionId` | 删除当前用户某一个永久会话 |
+| `DELETE` | `/memory/permanent?confirm=true` | 删除当前用户全部永久会话 |
 | `GET` | `/models` | 模型列表 |
 | `GET` | `/models/health` | provider 健康检查 |
 | `GET` | `/usage/stats` | token 和成本统计 |

@@ -573,7 +573,13 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
 // Bug 3 Fix: Empty/whitespace message returns SSE error
 // ============================================================
 router.post('/stream', async (req: Request, res: Response) => {
-  const { sessionId, message, model, provider } = req.body;
+  const { sessionId, message, agentId } = req.body;
+  let { model, provider } = req.body;
+  const thinking = req.body.thinking === true || req.body.thinking === 'true';
+  const rawAngles = Number(req.body.angles);
+  const angleBudget = Number.isFinite(rawAngles)
+    ? Math.max(1, Math.min(5, Math.floor(rawAngles)))
+    : 3;
   const userId = req.user?.userId || req.apiKey?.userId;
 
   // Bug 3 Fix: Must set SSE headers BEFORE any validation
@@ -606,6 +612,7 @@ router.post('/stream', async (req: Request, res: Response) => {
 
   const llmManager = getLLMManager();
   const tempMemory = getTemporaryMemory();
+  const permanentMemory = getPermanentMemory();
   const startTime = Date.now();
 
   logger.debug(`[SSE] Stream request started`, {
@@ -615,21 +622,88 @@ router.post('/stream', async (req: Request, res: Response) => {
   });
 
   try {
+    const agent = getAgent(agentId);
+    if (!model && agent?.model) model = agent.model;
+    if (!provider && agent?.provider) provider = agent.provider;
+
+    const existingConversation = await permanentMemory.getConversationBySessionId(session, userId);
+
     // Get conversation history
     const t1 = Date.now();
-    const history = await tempMemory.getMessages(session);
+    let history = await tempMemory.getMessages(session);
+    if (history.length === 0 && existingConversation) {
+      const persisted = await permanentMemory.getMessages(existingConversation.id, { pageSize: 20 });
+      for (const m of persisted) {
+        await tempMemory.addMessage(session, {
+          userId,
+          sessionId: session,
+          role: m.role as TempMessage['role'],
+          content: m.content,
+          modelId: m.modelId,
+          modelProvider: m.modelProvider,
+          metadata: m.metadata,
+        });
+      }
+      history = await tempMemory.getMessages(session);
+    }
     logger.debug(`[SSE] Redis: getMessages done`, {
       durationMs: Date.now() - t1,
       historyCount: history.length,
     });
 
-    const llmMessages: LLMMessage[] = [
-      ...history.map(msg => ({
-        role: msg.role as LLMMessage['role'],
-        content: msg.content,
-      })),
-      { role: 'user', content: trimmedMessage },
-    ];
+    const llmMessages: LLMMessage[] = history.map(msg => ({
+      role: msg.role as LLMMessage['role'],
+      content: msg.content,
+    }));
+
+    const systemMessagesToInject: Array<{ role: 'system'; content: string }> = [];
+    if (agent?.systemPromptId) {
+      const promptMgr = getPromptManager();
+      const rendered = promptMgr.render(agent.systemPromptId, { agent_name: agent.name }, 'system');
+      if (rendered) systemMessagesToInject.push({ role: 'system', content: rendered });
+    }
+
+    const stored = await getChart(userId, session).catch(() => null);
+    if (stored) {
+      const lines = (stored.chart.lines || []) as any[];
+      const t = stored.chart.time;
+      systemMessagesToInject.push({
+        role: 'system',
+        content: [
+          '【已排盘（来自 server-side ChartStore）】',
+          stored.chart.question ? `用户问题：${stored.chart.question}` : null,
+          stored.chart.questionType ? `问题类型：${stored.chart.questionType}` : null,
+          t ? `排盘时间：${[
+            t.yearStem && t.yearBranch ? `${t.yearStem}${t.yearBranch}年` : null,
+            t.monthStem && t.monthBranch ? `${t.monthStem}${t.monthBranch}月` : null,
+            t.dayStem && t.dayBranch ? `${t.dayStem}${t.dayBranch}日` : null,
+            t.hourStem && t.hourBranch ? `${t.hourStem}${t.hourBranch}时` : null,
+          ].filter(Boolean).join(' / ')}` : null,
+          `本卦：${stored.chart.originalHexagram?.name ?? '?'}（属${stored.chart.originalHexagram?.palace ?? '?'}宫，${stored.chart.originalHexagram?.element ?? '?'}）`,
+          `变卦：${stored.chart.changedHexagram?.name ?? '?'}`,
+          `动爻：${(stored.chart.movingLines || []).join('、') || '无'}`,
+          `世爻：第${lines.find((l) => l.isShi)?.position ?? '?'}爻 ${lines.find((l) => l.isShi)?.branch ?? ''}`,
+          `应爻：第${lines.find((l) => l.isYing)?.position ?? '?'}爻 ${lines.find((l) => l.isYing)?.branch ?? ''}`,
+          `六爻（六亲 + 六神）：`,
+          ...lines.map((l) =>
+            `  第${l.position}爻 ${l.branch}(${l.element}) ${l.sixRelative} 临${l.sixGod}` +
+            (l.moving ? ` 动→${l.changedYinYang}` : '') +
+            (l.isShi ? ' 【世】' : '') +
+            (l.isYing ? ' 【应】' : ''),
+          ),
+        ].filter(Boolean).join('\n'),
+      });
+    }
+
+    if (thinking) {
+      systemMessagesToInject.unshift({
+        role: 'system',
+        content: `深度推演已开启。请按 ${angleBudget} 个分析角度组织回答，但不要暴露模型私密推理链。`,
+      });
+    }
+
+    for (const m of systemMessagesToInject) llmMessages.unshift(m);
+    llmMessages.push({ role: 'user', content: trimmedMessage });
 
     let fullContent = '';
     // Resolve effective model/provider up front so we record real values in
@@ -662,12 +736,39 @@ router.post('/stream', async (req: Request, res: Response) => {
           }),
         ]);
 
+        const conversation = existingConversation ??
+          await permanentMemory.createConversation({
+            userId,
+            sessionId: session,
+            agentId: agent?.id || agentId || 'default',
+            modelId: resolvedModel,
+            modelProvider: resolvedProvider,
+            title: trimmedMessage.slice(0, 60),
+            tags: ['chat'],
+            isArchived: false,
+          });
+        await Promise.all([
+          permanentMemory.addMessage(conversation.id, {
+            role: 'user',
+            content: trimmedMessage,
+            modelId: resolvedModel,
+            modelProvider: resolvedProvider,
+          }),
+          permanentMemory.addMessage(conversation.id, {
+            role: 'assistant',
+            content: fullContent,
+            modelId: resolvedModel,
+            modelProvider: resolvedProvider,
+          }),
+        ]);
+
         // Record token usage for stream
         if (chunk.usage && chunk.usage.totalTokens > 0) {
           const tokenService = getTokenService();
           tokenService.recordUsage({
             userId,
             sessionId: session,
+            conversationId: conversation?.id?.toString(),
             modelId: resolvedModel,
             modelProvider: resolvedProvider,
             promptTokens: chunk.usage.inputTokens,

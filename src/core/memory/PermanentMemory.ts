@@ -142,6 +142,36 @@ export class PermanentMemory implements IPermanentStore {
     }
   }
 
+  async deleteConversationBySessionId(sessionId: string, userId: string): Promise<boolean> {
+    try {
+      const result = await ConversationModel.findOneAndDelete({ sessionId, userId });
+      if (result) {
+        await MessageModel.deleteMany({ conversationId: result._id });
+        logger.debug('Deleted conversation by sessionId and its messages', { sessionId, userId });
+        return true;
+      }
+      return false;
+    } catch (error) {
+      logger.error('Failed to delete conversation by sessionId:', error);
+      return false;
+    }
+  }
+
+  async deleteConversationsForUser(userId: string): Promise<number> {
+    try {
+      const conversations = await ConversationModel.find({ userId }).select('_id');
+      const conversationIds = conversations.map(c => c._id);
+      if (conversationIds.length === 0) return 0;
+      await MessageModel.deleteMany({ conversationId: { $in: conversationIds } });
+      const result = await ConversationModel.deleteMany({ _id: { $in: conversationIds }, userId });
+      logger.debug('Deleted all conversations for user', { userId, count: result.deletedCount });
+      return result.deletedCount || 0;
+    } catch (error) {
+      logger.error('Failed to delete conversations for user:', error);
+      return 0;
+    }
+  }
+
   async listConversations(
     userId: string,
     options: ListConversationsOptions = {}

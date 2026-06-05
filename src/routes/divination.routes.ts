@@ -62,12 +62,25 @@ import {
 import { getTemporaryMemory } from '../core/memory/TemporaryMemory';
 import { getPermanentMemory } from '../core/memory/PermanentMemory';
 import { getAgent } from '../core/agents/AgentLoader';
+import { getLLMManager } from '../core/llm/LLMFactory';
+import type { LLMMessage } from '../core/llm/types';
 import { HTTP_STATUS } from '../constants';
 import { logger } from '../utils/logger';
 import { generateSessionId } from '../utils/helpers';
 
 const router = Router();
 const DEFAULT_DIVINATION_CHAT_PROMPT = '请结合卦象分析、解答问题';
+const DEFAULT_INTERACTIVE_SUMMARY_PROMPT = [
+  '你是 Roy，一个六爻交互式 CLI Agent。',
+  '请把完整解卦报告压缩成适合命令行对话的短答。',
+  '要求：',
+  '1. 必须使用用户问题的语言。',
+  '2. 先给一句明确结论，格式为“结论：...”。',
+  '3. 给 3 条以内关键依据，每条 1-2 句。',
+  '4. 不要输出 RAG、LLM、pipeline、debug、JSON、Markdown、文件路径、provider、token 等工程术语。',
+  '5. 不要编造排盘；只能基于输入的排盘摘要和完整报告。',
+  '6. 不要输出完整长报告；完整报告由 /why 展开。',
+].join('\n');
 
 router.use(authMiddleware(true));
 
@@ -143,6 +156,41 @@ function validateCastInput(input: AssembleInput): void {
       'pass either `bits` OR `yaoValues`, not both',
       HTTP_STATUS.BAD_REQUEST);
   }
+}
+
+function buildSummaryMessages(body: any): LLMMessage[] {
+  const chart = body.chart || {};
+  const t = chart.time || {};
+  const lines = Array.isArray(chart.lines) ? chart.lines : [];
+  const shi = lines.find((l: any) => l.isShi);
+  const ying = lines.find((l: any) => l.isYing);
+  const chartSummary = [
+    body.question ? `用户问题：${body.question}` : null,
+    `本卦：${chart.originalHexagram?.fullName || chart.originalHexagram?.name || '?'}`,
+    `变卦：${chart.changedHexagram?.fullName || chart.changedHexagram?.name || '?'}`,
+    `卦宫：${chart.originalHexagram?.palace || '?'}宫 · ${chart.originalHexagram?.palaceType || '?'} · ${chart.originalHexagram?.element || '?'}`,
+    `动爻：${(chart.movingLines || []).join('、') || '无'}`,
+    shi ? `世爻：第${shi.position}爻 ${shi.stem || ''}${shi.branch || ''}(${shi.element || '?'}) ${shi.sixRelative || ''} 临${shi.sixGod || ''}${shi.void ? ' 旬空' : ''}` : null,
+    ying ? `应爻：第${ying.position}爻 ${ying.stem || ''}${ying.branch || ''}(${ying.element || '?'}) ${ying.sixRelative || ''} 临${ying.sixGod || ''}${ying.void ? ' 旬空' : ''}` : null,
+    t.yearStem ? `时间：${t.yearStem}${t.yearBranch}年 / ${t.monthStem}${t.monthBranch}月 / ${t.dayStem}${t.dayBranch}日 / ${t.hourStem}${t.hourBranch}时` : null,
+  ].filter(Boolean).join('\n');
+
+  const report = String(body.content || body.reportText || '').slice(0, 12000);
+  return [
+    { role: 'system', content: DEFAULT_INTERACTIVE_SUMMARY_PROMPT },
+    {
+      role: 'user',
+      content: [
+        '【排盘摘要】',
+        chartSummary,
+        '',
+        '【完整解卦报告】',
+        report,
+        '',
+        '请输出交互式短答。',
+      ].join('\n'),
+    },
+  ];
 }
 
 function parseAnalysisOptions(body: any): { debug: boolean; thinking: boolean; angles: number } {
@@ -375,6 +423,90 @@ router.post('/ask', asyncHandler(async (req: Request, res: Response) => {
     },
   });
 }));
+
+// ─── POST /summarize ─────────────────────────────────────────────────
+// LLM-produced short answer for the interactive CLI. This is intentionally
+// separate from /ask so the full report remains available for /why while
+// the default conversation stays compact.
+router.post('/summarize', asyncHandler(async (req: Request, res: Response) => {
+  userIdOrThrow(req);
+  const body = req.body || {};
+  if (!body.content && !body.reportText) {
+    throw new AppError('VALIDATION_ERROR', 'content or reportText is required', HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const agent = getAgent(body.agentId || 'default');
+  const llm = getLLMManager();
+  const response = await llm.chat(buildSummaryMessages(body), {
+    model: body.model || agent?.model,
+    temperature: 0.2,
+    maxTokens: 700,
+  });
+
+  res.json({
+    success: true,
+    data: {
+      content: response.content,
+      model: response.model,
+      provider: response.provider,
+      usage: response.usage,
+    },
+  });
+}));
+
+router.post('/summarize/stream', async (req: Request, res: Response) => {
+  try {
+    userIdOrThrow(req);
+    const body = req.body || {};
+    if (!body.content && !body.reportText) {
+      res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'content or reportText is required' },
+      });
+      return;
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    const agent = getAgent(body.agentId || 'default');
+    const llm = getLLMManager();
+    let fullContent = '';
+    for await (const chunk of llm.streamChat(buildSummaryMessages(body), {
+      model: body.model || agent?.model,
+      temperature: 0.2,
+      maxTokens: 700,
+    })) {
+      if (chunk.type === 'content' && chunk.content) {
+        fullContent += chunk.content;
+        res.write(`data: ${JSON.stringify({ type: 'content', content: chunk.content })}\n\n`);
+      } else if (chunk.type === 'done') {
+        res.write(`data: ${JSON.stringify({ type: 'done', content: fullContent, usage: chunk.usage })}\n\n`);
+      } else if (chunk.type === 'error') {
+        res.write(`data: ${JSON.stringify({ type: 'error', error: chunk.error })}\n\n`);
+      }
+    }
+  } catch (error) {
+    logger.error('[Divination summarize stream] error:', error);
+    if (!res.headersSent) {
+      res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: error instanceof Error ? error.message : 'Summarize stream failed',
+        },
+      });
+    } else {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: error instanceof Error ? error.message : 'Summarize stream failed',
+      })}\n\n`);
+    }
+  } finally {
+    res.end();
+  }
+});
 
 // ─── GET /chart/keys/:sessionId ───────────────────────────────────────
 router.get('/chart/keys/:sessionId', asyncHandler(async (req: Request, res: Response) => {

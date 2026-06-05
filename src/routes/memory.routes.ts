@@ -169,6 +169,63 @@ router.post('/permanent', asyncHandler(async (req: Request, res: Response) => {
   });
 }));
 
+// Delete all conversations for current user
+router.delete('/permanent', asyncHandler(async (req: Request, res: Response) => {
+  const userId = getUserId(req);
+  const confirm = req.query.confirm === 'true' || req.body?.confirm === true;
+
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      error: { code: 'UNAUTHORIZED', message: 'User ID required' },
+    });
+  }
+
+  if (!confirm) {
+    return res.status(HTTP_STATUS.BAD_REQUEST).json({
+      success: false,
+      error: { code: 'CONFIRM_REQUIRED', message: 'Pass confirm=true to delete all conversations for this user' },
+    });
+  }
+
+  const permanentMemory = getPermanentMemory();
+  const deletedCount = await permanentMemory.deleteConversationsForUser(userId);
+
+  res.json({
+    success: true,
+    data: { deletedCount },
+    message: 'All conversations deleted',
+  });
+}));
+
+// Delete conversation by sessionId for current user
+router.delete('/permanent/session/:sessionId', asyncHandler(async (req: Request, res: Response) => {
+  const userId = getUserId(req);
+  const { sessionId } = req.params;
+
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      error: { code: 'UNAUTHORIZED', message: 'User ID required' },
+    });
+  }
+
+  const permanentMemory = getPermanentMemory();
+  const deleted = await permanentMemory.deleteConversationBySessionId(sessionId, userId);
+
+  if (!deleted) {
+    return res.status(HTTP_STATUS.NOT_FOUND).json({
+      success: false,
+      error: { code: 'NOT_FOUND', message: 'Conversation not found' },
+    });
+  }
+
+  res.json({
+    success: true,
+    message: 'Conversation deleted',
+  });
+}));
+
 // Update conversation
 router.put('/permanent/:id', asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
@@ -197,8 +254,24 @@ router.put('/permanent/:id', asyncHandler(async (req: Request, res: Response) =>
 // Delete conversation
 router.delete('/permanent/:id', asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
+  const userId = getUserId(req);
+
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      error: { code: 'UNAUTHORIZED', message: 'User ID required' },
+    });
+  }
 
   const permanentMemory = getPermanentMemory();
+  const conversation = await permanentMemory.getConversation(id);
+  if (!conversation || conversation.userId !== userId) {
+    return res.status(HTTP_STATUS.NOT_FOUND).json({
+      success: false,
+      error: { code: 'NOT_FOUND', message: 'Conversation not found' },
+    });
+  }
+
   const deleted = await permanentMemory.deleteConversation(id);
 
   if (!deleted) {
