@@ -12,6 +12,8 @@
   ],
   "scripts": {
     "dev": "ts-node -r dotenv/config src/app.ts",
+    "web:dev": "npm --prefix web run dev",
+    "web:build": "npm --prefix web run build",
     "build": "tsc && chmod +x dist/cli/index.js",
     "start": "node dist/app.js",
     "typecheck": "tsc --noEmit",

@@ -56,6 +56,7 @@ OrbitAgent 当前最适合做一个“六爻专业分析后端”，上层可以
 | 分析 Agent | 可用 | brief -> understand -> RAG -> synthesize 的多阶段报告链路 |
 | 多 LLM | 可用 | DeepSeek、OpenAI、Anthropic、Gemini、Ollama、OpenAI-compatible provider |
 | CLI | 可用 | `orbit login/chat/divination/models/skills/tools/workflows/usage` |
+| Web 前端 | 可用 | Vite React + assistant-ui，邀请码访问，先起卦工作台、后追问对话 |
 | P2 规则 | 部分可用 | 冲合刑害破、旺衰量化、伏神飞神、化进化退、完整用神取用仍需补强 |
 
 ## 仓库结构
@@ -145,6 +146,38 @@ http://localhost:3000
 http://localhost:3000/api/v1/health
 http://localhost:3000/api/v1/status/page
 ```
+
+### 1.1 Web 前端
+
+Web 版本在 `web/` 目录，使用 Vite React、assistant-ui 和同源 `/api/v1` 代理。开发时需要同时启动后端和前端：
+
+```bash
+npm run dev
+npm run web:dev
+```
+
+默认访问：
+
+```text
+http://127.0.0.1:5173/
+```
+
+Web 交互流程：
+
+1. 首次访问需要输入长期邀请码。
+2. 邀请码首次使用时会绑定浏览器生成的 `deviceId`，同一邀请码后续需要在同一设备标识下使用。
+3. 登录后第一屏是起卦工作台，支持自动摇卦、手动六爻、时间、数字、汉字起卦。
+4. 起卦完成后才进入追问对话；对话框固定在底部，等待起卦或回复时会显示转圈加载态。
+5. 对话默认只显示短答。卦象和解读在输入框上方的“起卦资料”按钮中打开，可关闭；卦象会绘制本卦和有动爻时的变卦。
+6. 默认 Web 展示会清理 `[cite: ...]` 和引用块，不暴露 RAG 标记；完整依据仍保留在服务端分析数据中。
+
+生产构建：
+
+```bash
+npm run web:build
+```
+
+长期邀请码由启动时的 seed 写入数据库。明文分享清单放在 `docs/invite-codes.md`，该文件已加入 `.gitignore`，不要提交到仓库。
 
 ### 2. CLI 指令完整说明
 

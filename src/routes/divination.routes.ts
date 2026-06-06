@@ -175,7 +175,9 @@ function buildSummaryMessages(body: any): LLMMessage[] {
     t.yearStem ? `时间：${t.yearStem}${t.yearBranch}年 / ${t.monthStem}${t.monthBranch}月 / ${t.dayStem}${t.dayBranch}日 / ${t.hourStem}${t.hourBranch}时` : null,
   ].filter(Boolean).join('\n');
 
-  const report = String(body.content || body.reportText || '').slice(0, 12000);
+  const report = formatCitationDisplay(String(body.content || body.reportText || ''), {
+    showCitations: false,
+  }).slice(0, 12000);
   return [
     { role: 'system', content: DEFAULT_INTERACTIVE_SUMMARY_PROMPT },
     {
@@ -398,7 +400,9 @@ router.post('/ask', asyncHandler(async (req: Request, res: Response) => {
       modelProvider: analysis.debug?.synthesis?.provider || body.provider || agent?.provider,
       metadata: {
         chartKey,
+        chart,
         report: analysis.report,
+        content,
       },
     }),
   ]);
@@ -513,6 +517,52 @@ router.get('/chart/keys/:sessionId', asyncHandler(async (req: Request, res: Resp
   const userId = userIdOrThrow(req);
   const keys = await listChartKeys(userId, req.params.sessionId);
   res.json({ success: true, data: { sessionId: req.params.sessionId, keys } });
+}));
+
+// ─── GET /reading/:sessionId ─────────────────────────────────────────
+// Restore the cast artifact for an existing conversation. The chart is
+// loaded from ChartStore when available, with a metadata snapshot fallback
+// for older conversations or charts that outlive the temporary chart TTL.
+router.get('/reading/:sessionId', asyncHandler(async (req: Request, res: Response) => {
+  const userId = userIdOrThrow(req);
+  const permanentMemory = getPermanentMemory();
+  const conversation = await permanentMemory.getConversationBySessionId(req.params.sessionId, userId);
+
+  if (!conversation) {
+    throw new AppError('READING_NOT_FOUND', 'No divination reading for this session', HTTP_STATUS.NOT_FOUND);
+  }
+
+  const messages = await permanentMemory.getMessages(conversation.id, { pageSize: 200 });
+  const assistant = [...messages].reverse().find((message) =>
+    message.role === 'assistant' &&
+    (message.metadata?.report || message.metadata?.chartKey || message.metadata?.chart)
+  );
+  const userMessage = messages.find((message) => message.role === 'user');
+  const chartKey = assistant?.metadata?.chartKey || userMessage?.metadata?.chartKey || 'default';
+
+  let storedChart = null;
+  try {
+    storedChart = await getLatestChart(userId, req.params.sessionId);
+  } catch {
+    storedChart = null;
+  }
+  const chart = storedChart?.chart || assistant?.metadata?.chart;
+  if (!chart) {
+    throw new AppError('READING_NOT_FOUND', 'No chart snapshot for this session', HTTP_STATUS.NOT_FOUND);
+  }
+
+  res.json({
+    success: true,
+    data: {
+      sessionId: req.params.sessionId,
+      chartKey,
+      message: userMessage?.content,
+      content: assistant?.metadata?.content || assistant?.content || '',
+      casting: userMessage?.metadata?.casting,
+      chart,
+      report: assistant?.metadata?.report,
+    },
+  });
 }));
 
 // ─── POST /analyze ───────────────────────────────────────────────────

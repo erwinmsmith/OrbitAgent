@@ -8,6 +8,26 @@ This guide helps frontend developers integrate with OrbitAgent API.
 
 ## Authentication Flow
 
+### Option 0: Invite-code Authentication (Web Version)
+
+The web UI can use a long-lived invite code as the account credential.
+
+```typescript
+const deviceId = localStorage.getItem('orbit.web.deviceId') ?? crypto.randomUUID();
+localStorage.setItem('orbit.web.deviceId', deviceId);
+
+const res = await fetch('/api/v1/auth/invite', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ code: 'ORB-XXXX-XXXX-XXXX', deviceId }),
+});
+
+const data = await res.json();
+const token = data.data.accessToken;
+```
+
+Each invite code maps to one persistent user account. Codes are not consumed after login; reusing the same code returns the same account and conversation history. On first use, the code is bound to the submitted device id, so later logins must come from the same stored device id.
+
 ### Option 1: JWT Authentication (Web Apps)
 
 ```

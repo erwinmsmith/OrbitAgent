@@ -4,6 +4,7 @@ import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { authMiddleware, generateToken, generateRefreshToken, verifyRefreshToken } from '../middleware/auth';
 import { UserModel } from '../models/User';
 import { ApiKeyModel } from '../models/ApiKey';
+import { authenticateInviteCode, normalizeInviteCode } from '../services/InviteCodeService';
 import { HTTP_STATUS } from '../constants';
 import { logger } from '../utils/logger';
 
@@ -25,6 +26,52 @@ const loginSchema = Joi.object({
   phone: Joi.string().pattern(/^\+?[0-9]{7,15}$/).optional(),
   password: Joi.string().required(),
 }).or('email', 'phone'); // at least one identifier required
+
+const inviteLoginSchema = Joi.object({
+  code: Joi.string().min(8).max(64).required(),
+  deviceId: Joi.string().min(16).max(128).required(),
+});
+
+// Invite-code login. The invite code acts as the account credential:
+// it is not consumed, and the same code always returns to the same user.
+router.post('/invite', asyncHandler(async (req: Request, res: Response) => {
+  const { error, value } = inviteLoginSchema.validate(req.body);
+  if (error) {
+    throw new AppError('VALIDATION_ERROR', error.message, HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const normalizedCode = normalizeInviteCode(value.code);
+  const result = await authenticateInviteCode(normalizedCode, value.deviceId);
+  if (!result) {
+    throw new AppError('INVALID_INVITE_CODE', 'Invalid invite code', HTTP_STATUS.UNAUTHORIZED);
+  }
+
+  const { invite, user } = result;
+  if (!user.isActive) {
+    throw new AppError('ACCOUNT_DISABLED', 'Account is disabled', HTTP_STATUS.FORBIDDEN);
+  }
+
+  user.lastLoginAt = new Date();
+  await user.save();
+
+  const accessToken = generateToken(user);
+  const refreshToken = generateRefreshToken(user);
+
+  logger.info(`Invite user logged in: ${user.email}`);
+
+  res.json({
+    success: true,
+    data: {
+      user: user.toSafeObject(),
+      invite: {
+        label: invite.label,
+        lastUsedAt: invite.lastUsedAt,
+      },
+      accessToken,
+      refreshToken,
+    },
+  });
+}));
 
 // Register
 router.post('/register', asyncHandler(async (req: Request, res: Response) => {

@@ -17,6 +17,7 @@ import { bootstrapSystemKnowledge } from './liuyao/rag';
 import { getTemporaryMemory } from './core/memory/TemporaryMemory';
 import { getPermanentMemory } from './core/memory/PermanentMemory';
 import { initDevTestUser, initDevAdminUser, getDevTestToken } from './services/DevAuth';
+import { seedInviteCodes } from './services/InviteCodeService';
 import routes from './routes';
 import { errorHandler, notFoundHandler, requestLogger, rateLimitHandler } from './middleware/errorHandler';
 import { HTTP_STATUS } from './constants';
@@ -109,6 +110,10 @@ class Application {
 
     // Initialize databases
     await initializeDatabases();
+
+    // Ensure long-lived web invite-code accounts exist before auth routes
+    // are used. This is idempotent and never consumes a code.
+    await seedInviteCodes();
 
     // Initialize LLM Manager
     await initializeLLM();

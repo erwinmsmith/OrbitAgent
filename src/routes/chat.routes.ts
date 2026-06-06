@@ -820,13 +820,91 @@ router.post('/stream', async (req: Request, res: Response) => {
   res.end();
 });
 
+// List permanent conversations for the current account.
+router.get('/conversations', asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.user?.userId || req.apiKey?.userId;
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      error: { code: 'UNAUTHORIZED', message: 'User ID required' },
+    });
+  }
+
+  const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
+  const pageSize = Math.min(50, Math.max(1, parseInt(req.query.pageSize as string, 10) || 30));
+  const permanentMemory = getPermanentMemory();
+  const conversations = await permanentMemory.listConversations(userId, {
+    page,
+    pageSize,
+    isArchived: false,
+  });
+
+  res.json({
+    success: true,
+    data: conversations,
+  });
+}));
+
+// Get permanent messages for a conversation by sessionId.
+router.get('/conversations/:sessionId/messages', asyncHandler(async (req: Request, res: Response) => {
+  const { sessionId } = req.params;
+  const userId = req.user?.userId || req.apiKey?.userId;
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      error: { code: 'UNAUTHORIZED', message: 'User ID required' },
+    });
+  }
+
+  const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
+  const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize as string, 10) || 100));
+  const permanentMemory = getPermanentMemory();
+  const conversation = await permanentMemory.getConversationBySessionId(sessionId, userId);
+
+  if (!conversation) {
+    return res.json({
+      success: true,
+      data: [],
+    });
+  }
+
+  const messages = await permanentMemory.getMessages(conversation.id, { page, pageSize });
+
+  res.json({
+    success: true,
+    data: messages,
+  });
+}));
+
 // Get chat history
 router.get('/:sessionId', asyncHandler(async (req: Request, res: Response) => {
   const { sessionId } = req.params;
   const { limit } = req.query;
+  const userId = req.user?.userId || req.apiKey?.userId;
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      error: { code: 'UNAUTHORIZED', message: 'User ID required' },
+    });
+  }
 
   const tempMemory = getTemporaryMemory();
-  const messages = await tempMemory.getMessages(sessionId, limit ? parseInt(limit as string) : undefined);
+  const permanentMemory = getPermanentMemory();
+  const tempMessages = (await tempMemory.getMessages(sessionId, limit ? parseInt(limit as string) : undefined))
+    .filter(message => message.userId === userId);
+  if (tempMessages.length > 0) {
+    return res.json({
+      success: true,
+      data: tempMessages,
+    });
+  }
+
+  const conversation = await permanentMemory.getConversationBySessionId(sessionId, userId);
+  const messages = conversation
+    ? await permanentMemory.getMessages(conversation.id, {
+      pageSize: limit ? parseInt(limit as string, 10) : 100,
+    })
+    : [];
 
   res.json({
     success: true,

@@ -45,3 +45,6 @@ Thumbs.db
 
 # Agent
 CLAUDE.md
+
+# Long-lived invite codes for sharing, keep out of git by default
+docs/invite-codes.md
