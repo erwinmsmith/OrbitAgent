@@ -42,8 +42,15 @@ router.post('/invite', asyncHandler(async (req: Request, res: Response) => {
 
   const normalizedCode = normalizeInviteCode(value.code);
   const result = await authenticateInviteCode(normalizedCode, value.deviceId);
-  if (!result) {
-    throw new AppError('INVALID_INVITE_CODE', 'Invalid invite code', HTTP_STATUS.UNAUTHORIZED);
+  if (!result.ok) {
+    if (result.reason === 'device_mismatch') {
+      throw new AppError(
+        'INVITE_CODE_DEVICE_MISMATCH',
+        '此邀请码已绑定其他设备',
+        HTTP_STATUS.FORBIDDEN,
+      );
+    }
+    throw new AppError('INVALID_INVITE_CODE', '邀请码无效或未启用', HTTP_STATUS.UNAUTHORIZED);
   }
 
   const { invite, user } = result;

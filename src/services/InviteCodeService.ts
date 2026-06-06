@@ -20,6 +20,21 @@ export function hashDeviceId(deviceId: string): string {
   return crypto.createHash('sha256').update(normalizeDeviceId(deviceId)).digest('hex');
 }
 
+export type InviteCodeAuthFailure = 'invalid' | 'device_mismatch';
+
+export interface InviteCodeAuthSuccess {
+  ok: true;
+  invite: IInviteCode;
+  user: IUser;
+}
+
+export interface InviteCodeAuthError {
+  ok: false;
+  reason: InviteCodeAuthFailure;
+}
+
+export type InviteCodeAuthResult = InviteCodeAuthSuccess | InviteCodeAuthError;
+
 function inviteUsername(code: string): string {
   return `invite_${normalizeInviteCode(code).toLowerCase().replace(/[^a-z0-9]/g, '')}`;
 }
@@ -83,21 +98,21 @@ async function ensureInviteUser(invite: IInviteCode, code: string): Promise<IUse
 export async function authenticateInviteCode(
   code: string,
   deviceId: string,
-): Promise<{ invite: IInviteCode; user: IUser } | null> {
+): Promise<InviteCodeAuthResult> {
   const normalized = normalizeInviteCode(code);
   const normalizedDeviceId = normalizeDeviceId(deviceId);
-  if (!normalized || !normalizedDeviceId) return null;
+  if (!normalized || !normalizedDeviceId) return { ok: false, reason: 'invalid' };
 
   const invite = await InviteCodeModel.findOne({
     codeHash: hashInviteCode(normalized),
     isActive: true,
   });
 
-  if (!invite) return null;
+  if (!invite) return { ok: false, reason: 'invalid' };
 
   const deviceIdHash = hashDeviceId(normalizedDeviceId);
   if (invite.deviceIdHash && invite.deviceIdHash !== deviceIdHash) {
-    return null;
+    return { ok: false, reason: 'device_mismatch' };
   }
   if (!invite.deviceIdHash) {
     invite.deviceIdHash = deviceIdHash;
@@ -108,5 +123,5 @@ export async function authenticateInviteCode(
   invite.lastUsedAt = new Date();
   await invite.save();
 
-  return { invite, user };
+  return { ok: true, invite, user };
 }

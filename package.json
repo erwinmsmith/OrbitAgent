@@ -14,6 +14,7 @@
     "dev": "ts-node -r dotenv/config src/app.ts",
     "web:dev": "npm --prefix web run dev",
     "web:build": "npm --prefix web run build",
+    "invite:reset-bindings": "ts-node -r dotenv/config src/scripts/resetInviteDeviceBindings.ts",
     "build": "tsc && chmod +x dist/cli/index.js",
     "start": "node dist/app.js",
     "typecheck": "tsc --noEmit",
