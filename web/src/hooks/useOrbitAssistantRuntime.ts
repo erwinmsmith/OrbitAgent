@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useExternalStoreRuntime, type AppendMessage, type ThreadMessageLike } from '@assistant-ui/react'
 import { streamChat, type ApiMessage } from '../lib/api'
 
@@ -22,6 +22,8 @@ interface UseOrbitRuntimeOptions {
 
 const createId = (prefix: string) =>
   `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`
+
+const EMPTY_MESSAGES: OrbitUiMessage[] = []
 
 function textFromAppendMessage(message: AppendMessage): string {
   return message.content
@@ -58,16 +60,39 @@ export function useOrbitAssistantRuntime({
   onSessionResolved,
   onConversationChanged,
 }: UseOrbitRuntimeOptions) {
-  const [messages, setMessages] = useState<OrbitUiMessage[]>([])
-  const [isRunning, setIsRunning] = useState(false)
-  const isRunningRef = useRef(false)
-  const abortRef = useRef<AbortController | null>(null)
+  const [messagesBySession, setMessagesBySession] = useState<Record<string, OrbitUiMessage[]>>({})
+  const [runningSessions, setRunningSessions] = useState<Record<string, boolean>>({})
+  const runningRef = useRef<Record<string, boolean>>({})
+  const abortsRef = useRef<Record<string, AbortController>>({})
+  const activeSessionRef = useRef(sessionId)
+
+  useEffect(() => {
+    activeSessionRef.current = sessionId
+  }, [sessionId])
+
+  const setSessionMessages = useCallback((
+    targetSessionId: string,
+    next:
+      | OrbitUiMessage[]
+      | ((current: OrbitUiMessage[]) => OrbitUiMessage[]),
+  ) => {
+    setMessagesBySession((current) => {
+      const currentMessages = current[targetSessionId] ?? []
+      const nextMessages = typeof next === 'function' ? next(currentMessages) : next
+      return {
+        ...current,
+        [targetSessionId]: [...nextMessages],
+      }
+    })
+  }, [])
 
   const onNew = useCallback(
     async (message: AppendMessage) => {
       const text = textFromAppendMessage(message)
-      if (!text || isRunningRef.current) return
-      isRunningRef.current = true
+      const requestSessionId = sessionId
+      if (!text || runningRef.current[requestSessionId]) return
+      runningRef.current = { ...runningRef.current, [requestSessionId]: true }
+      setRunningSessions((current) => ({ ...current, [requestSessionId]: true }))
 
       const userMessage: OrbitUiMessage = {
         id: createId('user'),
@@ -84,18 +109,17 @@ export function useOrbitAssistantRuntime({
         status: { type: 'running' },
       }
 
-      setMessages((current) => [...current, userMessage, assistantMessage])
-      setIsRunning(true)
+      setSessionMessages(requestSessionId, (current) => [...current, userMessage, assistantMessage])
 
       const controller = new AbortController()
-      abortRef.current = controller
+      abortsRef.current = { ...abortsRef.current, [requestSessionId]: controller }
 
       try {
         let finalContent = ''
         for await (const event of streamChat(
           token,
           {
-            sessionId,
+            sessionId: requestSessionId,
             message: text,
             agentId: 'default',
           },
@@ -103,7 +127,7 @@ export function useOrbitAssistantRuntime({
         )) {
           if (event.type === 'content' && event.content) {
             finalContent += event.content
-            setMessages((current) =>
+            setSessionMessages(requestSessionId, (current) =>
               current.map((item) =>
                 item.id === assistantId
                   ? {
@@ -117,8 +141,10 @@ export function useOrbitAssistantRuntime({
           }
 
           if (event.type === 'done') {
-            if (event.sessionId) onSessionResolved(event.sessionId)
-            setMessages((current) =>
+            if (event.sessionId && activeSessionRef.current === requestSessionId) {
+              onSessionResolved(event.sessionId)
+            }
+            setSessionMessages(requestSessionId, (current) =>
               current.map((item) =>
                 item.id === assistantId
                   ? {
@@ -138,7 +164,7 @@ export function useOrbitAssistantRuntime({
         onConversationChanged()
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Assistant stream failed'
-        setMessages((current) =>
+        setSessionMessages(requestSessionId, (current) =>
           current.map((item) =>
             item.id === assistantId
               ? {
@@ -154,22 +180,33 @@ export function useOrbitAssistantRuntime({
           ),
         )
       } finally {
-        if (abortRef.current === controller) abortRef.current = null
-        isRunningRef.current = false
-        setIsRunning(false)
+        const nextAborts = { ...abortsRef.current }
+        delete nextAborts[requestSessionId]
+        abortsRef.current = nextAborts
+        const nextRunningRef = { ...runningRef.current }
+        delete nextRunningRef[requestSessionId]
+        runningRef.current = nextRunningRef
+        setRunningSessions((current) => {
+          const next = { ...current }
+          delete next[requestSessionId]
+          return next
+        })
       }
     },
-    [onConversationChanged, onSessionResolved, sessionId, token],
+    [onConversationChanged, onSessionResolved, sessionId, setSessionMessages, token],
   )
+
+  const messages = messagesBySession[sessionId] ?? EMPTY_MESSAGES
+  const isRunning = !!runningSessions[sessionId]
 
   const runtime = useExternalStoreRuntime({
     messages,
-    setMessages: (nextMessages) => setMessages([...nextMessages]),
+    setMessages: (nextMessages) => setSessionMessages(sessionId, [...nextMessages]),
     isRunning,
     isSendDisabled,
     onNew,
     onCancel: async () => {
-      abortRef.current?.abort()
+      abortsRef.current[sessionId]?.abort()
     },
     convertMessage: (message: OrbitUiMessage) => ({
       id: message.id,
@@ -184,9 +221,12 @@ export function useOrbitAssistantRuntime({
     () => ({
       runtime,
       messages,
-      setMessages,
+      setMessages: (next: OrbitUiMessage[] | ((current: OrbitUiMessage[]) => OrbitUiMessage[])) =>
+        setSessionMessages(sessionId, next),
+      setSessionMessages,
       isRunning,
+      runningSessions,
     }),
-    [isRunning, messages, runtime],
+    [isRunning, messages, runtime, runningSessions, sessionId, setSessionMessages],
   )
 }

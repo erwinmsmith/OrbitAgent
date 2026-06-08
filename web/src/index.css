@@ -418,6 +418,80 @@ h1 {
   font-weight: 700;
 }
 
+.casting-progress {
+  margin: 0 0 14px;
+  padding: 12px;
+  border: 1px solid rgba(22, 116, 95, 0.18);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(135deg, rgba(22, 116, 95, 0.08), rgba(184, 132, 42, 0.08)),
+    rgba(255, 253, 247, 0.76);
+}
+
+.casting-progress[data-state='idle'] {
+  background: rgba(23, 21, 18, 0.025);
+}
+
+.casting-progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--jade-dark);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.casting-progress-head strong {
+  color: var(--ink);
+}
+
+.progress-track {
+  height: 8px;
+  margin: 9px 0;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(23, 21, 18, 0.08);
+}
+
+.progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--jade), var(--gold));
+  transition: width 220ms ease;
+}
+
+.casting-progress[data-state='error'] .progress-track span {
+  background: var(--cinnabar);
+}
+
+.progress-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.progress-steps span {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.progress-steps span[data-active='true'] {
+  color: var(--jade-dark);
+}
+
+.casting-progress p {
+  margin: 8px 0 0;
+  color: var(--cinnabar);
+  font-size: 12px;
+}
+
 .method-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -640,26 +714,52 @@ h1 {
   font-size: 13px;
 }
 
+.chart-detail-layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.95fr) minmax(260px, 1.05fr);
+  gap: 14px;
+  padding: 14px;
+}
+
+.chart-visual-panel {
+  min-width: 0;
+  border: 1px solid rgba(22, 116, 95, 0.16);
+  border-radius: var(--radius);
+  background: rgba(255, 253, 247, 0.7);
+  overflow: hidden;
+}
+
+.casting-date {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--jade-dark);
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .hexagram-pair {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
-  padding: 14px;
-  border-bottom: 1px solid var(--line);
+  padding: 12px;
 }
 
 .hexagram-figure {
   border: 1px solid rgba(22, 116, 95, 0.18);
   border-radius: var(--radius);
-  background: rgba(255, 253, 247, 0.7);
-  padding: 12px;
+  background:
+    linear-gradient(180deg, rgba(255, 253, 247, 0.96), rgba(248, 247, 241, 0.78));
+  padding: 12px 14px 14px;
 }
 
 .hexagram-title {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 12px;
+  display: grid;
+  gap: 4px;
+  margin-bottom: 14px;
+  text-align: center;
 }
 
 .hexagram-title strong {
@@ -672,19 +772,20 @@ h1 {
 .hexagram-title span {
   color: var(--muted);
   font-size: 12px;
-  white-space: nowrap;
 }
 
 .hexagram-lines {
   display: grid;
-  gap: 7px;
+  gap: 8px;
+  max-width: 150px;
+  margin: 0 auto;
 }
 
 .hex-line {
-  height: 10px;
+  height: 12px;
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  gap: 16px;
   position: relative;
 }
 
@@ -703,11 +804,100 @@ h1 {
   position: absolute;
   right: -2px;
   top: 50%;
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: var(--cinnabar);
   transform: translate(100%, -50%);
+}
+
+.chart-facts {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.chart-fact {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 253, 247, 0.72);
+  padding: 9px 10px;
+}
+
+.chart-fact span,
+.reading-teaser-grid span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.chart-fact strong,
+.reading-teaser-grid strong {
+  display: block;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.35;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
+.yao-table {
+  grid-column: 1 / -1;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: rgba(255, 253, 247, 0.74);
+}
+
+.yao-table-head {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--jade-dark);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.yao-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1.2fr) minmax(72px, 0.8fr) minmax(96px, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  border-top: 1px solid rgba(223, 216, 202, 0.58);
+  font-size: 13px;
+}
+
+.yao-row:first-of-type {
+  border-top: 0;
+}
+
+.yao-row > span {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.yao-row strong {
+  font-weight: 800;
+}
+
+.yao-row em {
+  color: var(--jade-dark);
+  font-style: normal;
+  font-weight: 800;
+}
+
+.yao-row small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.detail-empty {
+  margin: 0;
+  padding: 14px;
+  color: var(--muted);
 }
 
 .empty-thread {
@@ -829,6 +1019,72 @@ h1 {
 
 .chat-message[data-role='assistant'] .message-bubble {
   box-shadow: 0 12px 36px rgba(57, 47, 32, 0.08);
+}
+
+.reading-teaser {
+  max-width: min(760px, 86%);
+  margin: 4px 0 18px;
+  border: 1px solid rgba(22, 116, 95, 0.22);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(135deg, rgba(22, 116, 95, 0.08), rgba(184, 132, 42, 0.1)),
+    rgba(255, 253, 247, 0.96);
+  box-shadow: 0 14px 38px rgba(57, 47, 32, 0.1);
+  padding: 14px;
+}
+
+.reading-teaser h3 {
+  margin: 2px 0 3px;
+  font-family: var(--font-display);
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.reading-teaser > div:first-child > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.reading-teaser-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.reading-teaser-grid div {
+  min-width: 0;
+  border: 1px solid rgba(223, 216, 202, 0.72);
+  border-radius: var(--radius);
+  background: rgba(255, 253, 247, 0.72);
+  padding: 8px 9px;
+}
+
+.reading-teaser-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.reading-teaser-actions button {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 253, 247, 0.88);
+  color: var(--ink);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  font-weight: 800;
+}
+
+.reading-teaser-actions button:hover {
+  border-color: rgba(22, 116, 95, 0.32);
+  background: rgba(22, 116, 95, 0.12);
+  color: var(--jade-dark);
 }
 
 .composer-footer {
@@ -1041,6 +1297,15 @@ h1 {
     flex: 1;
   }
 
+  .progress-steps {
+    gap: 4px;
+  }
+
+  .progress-steps span {
+    gap: 3px;
+    font-size: 11px;
+  }
+
   .method-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1086,20 +1351,49 @@ h1 {
     justify-content: center;
   }
 
+  .chart-detail-layout {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .chart-facts,
+  .reading-teaser-grid {
+    grid-template-columns: 1fr;
+  }
+
   .hexagram-pair {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
     padding: 10px;
   }
 
-  .hexagram-title {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 3px;
+  .hexagram-figure {
+    padding: 10px 8px 12px;
   }
 
-  .hexagram-title span {
-    white-space: normal;
+  .hexagram-title strong {
+    font-size: 16px;
+  }
+
+  .hexagram-lines {
+    max-width: 104px;
+    gap: 6px;
+  }
+
+  .hex-line {
+    height: 10px;
+    gap: 11px;
+  }
+
+  .yao-row {
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 5px 8px;
+  }
+
+  .yao-row em,
+  .yao-row small {
+    grid-column: 2;
   }
 
   .attachment-tools {
@@ -1129,6 +1423,21 @@ h1 {
   .message-bubble {
     max-width: 94%;
     padding: 12px;
+  }
+
+  .reading-teaser {
+    max-width: 94%;
+    padding: 12px;
+  }
+
+  .reading-teaser-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .reading-teaser-actions button {
+    justify-content: center;
+    padding: 0 6px;
   }
 
   .composer-footer {

@@ -10,6 +10,9 @@ import ReactMarkdown from 'react-markdown'
 import {
   BookOpen,
   Brain,
+  CalendarDays,
+  CheckCircle2,
+  Circle,
   FileText,
   LoaderCircle,
   LogOut,
@@ -48,6 +51,27 @@ const DEFAULT_DIVINATION_PROMPT = '请结合卦象分析、解答问题。'
 
 type DetailPanel = 'chart' | 'why' | null
 type AnalysisMode = 'quick' | 'deep'
+type CastingStage = 'idle' | 'casting' | 'analysis' | 'summary' | 'done' | 'error'
+
+interface CastingProgress {
+  stage: CastingStage
+  label: string
+  percent: number
+}
+
+const IDLE_PROGRESS: CastingProgress = {
+  stage: 'idle',
+  label: '等待起卦',
+  percent: 0,
+}
+
+const CASTING_PROGRESS: Record<Exclude<CastingStage, 'idle'>, CastingProgress> = {
+  casting: { stage: 'casting', label: '排盘起卦', percent: 28 },
+  analysis: { stage: 'analysis', label: '推演分析', percent: 58 },
+  summary: { stage: 'summary', label: '生成短答', percent: 84 },
+  done: { stage: 'done', label: '完成', percent: 100 },
+  error: { stage: 'error', label: '出错', percent: 100 },
+}
 
 const METHODS: Array<{ id: DivinationMethod; label: string; hint: string }> = [
   { id: 'coins', label: '自动摇卦', hint: '模拟三枚硬币摇六次' },
@@ -115,6 +139,55 @@ function arrayValue(value: unknown): unknown[] {
   return Array.isArray(value) ? value : []
 }
 
+function chartTime(reading: Record<string, unknown> | null): Record<string, unknown> {
+  return asRecord(asRecord(reading?.chart).time)
+}
+
+function formatCastingDate(reading: Record<string, unknown> | null): string {
+  const datetime = chartTime(reading).datetime
+  if (typeof datetime !== 'string' || !datetime) return '未记录起卦时间'
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: textValue(chartTime(reading).timezone, 'Asia/Shanghai'),
+  }).format(new Date(datetime))
+}
+
+function chartSummaryItems(reading: Record<string, unknown> | null): Array<{ label: string; value: string }> {
+  if (!reading) return []
+  const chart = asRecord(reading.chart)
+  const original = asRecord(chart.originalHexagram)
+  const changed = asRecord(chart.changedHexagram)
+  const time = chartTime(reading)
+  const lines = arrayValue(chart.lines).map(asRecord)
+  const shi = lines.find((line) => line.isShi)
+  const ying = lines.find((line) => line.isYing)
+  const pillars = [
+    time.yearPillar && `${time.yearPillar}年`,
+    time.monthPillar && `${time.monthPillar}月`,
+    time.dayPillar && `${time.dayPillar}日`,
+    time.hourPillar && `${time.hourPillar}时`,
+  ].filter(Boolean).join(' ')
+  const moving = arrayValue(chart.movingLines).join('、') || '无'
+  return [
+    { label: '起卦', value: formatCastingDate(reading) },
+    { label: '本卦', value: textValue(original.fullName, textValue(original.name)) },
+    ...(hasChangedHexagram(reading)
+      ? [{ label: '变卦', value: textValue(changed.fullName, textValue(changed.name)) }]
+      : []),
+    { label: '卦宫', value: `${textValue(original.palace)}宫 · ${textValue(original.palaceType)} · ${textValue(original.element)}` },
+    { label: '动爻', value: moving },
+    ...(pillars ? [{ label: '四柱', value: pillars }] : []),
+    ...(Array.isArray(time.xunkong) ? [{ label: '旬空', value: time.xunkong.join('、') }] : []),
+    ...(time.solarTerm ? [{ label: '节气', value: textValue(time.solarTerm) }] : []),
+    ...(shi ? [{ label: '世爻', value: `第${shi.position}爻 ${textValue(shi.branch, '')} ${textValue(shi.sixRelative, '')} 临${textValue(shi.sixGod, '')}` }] : []),
+    ...(ying ? [{ label: '应爻', value: `第${ying.position}爻 ${textValue(ying.branch, '')} ${textValue(ying.sixRelative, '')} 临${textValue(ying.sixGod, '')}` }] : []),
+  ]
+}
+
 function parseNumbersInput(value: string): number[] | null {
   const numbers = value
     .trim()
@@ -134,38 +207,6 @@ function parseManualInput(value: string): { bits?: number[]; yaoValues?: number[
   if (values.every((item) => item === 0 || item === 1)) return { bits: values }
   if (values.every((item) => [6, 7, 8, 9].includes(item))) return { yaoValues: values }
   return null
-}
-
-function chartLines(reading: Record<string, unknown> | null, full = false): string[] {
-  if (!reading) return ['当前没有可展示的卦象。']
-  const chart = asRecord(reading.chart)
-  const original = asRecord(chart.originalHexagram)
-  const changed = asRecord(chart.changedHexagram)
-  const moving = arrayValue(chart.movingLines).join('、') || '无'
-  const lines = arrayValue(chart.lines).map(asRecord)
-  const shi = lines.find((line) => line.isShi)
-  const ying = lines.find((line) => line.isYing)
-  const changedRows = hasChangedHexagram(reading)
-    ? [`变卦：${textValue(changed.fullName, textValue(changed.name))}`]
-    : []
-  const rows = [
-    `起卦：${textValue(asRecord(reading.casting).method, 'input')}`,
-    `本卦：${textValue(original.fullName, textValue(original.name))}`,
-    ...changedRows,
-    `卦宫：${textValue(original.palace)}宫 · ${textValue(original.palaceType)} · ${textValue(original.element)}`,
-    `动爻：${moving}`,
-    shi ? `世爻：第${shi.position}爻 ${textValue(shi.branch, '')} ${textValue(shi.sixRelative, '')} 临${textValue(shi.sixGod, '')}` : '世爻：未标注',
-    ying ? `应爻：第${ying.position}爻 ${textValue(ying.branch, '')} ${textValue(ying.sixRelative, '')} 临${textValue(ying.sixGod, '')}` : '应爻：未标注',
-  ]
-  if (!full) return rows
-  return [
-    ...rows,
-    '',
-    '六爻（初爻 → 上爻）',
-    ...lines.map((line) =>
-      `${line.position}  ${textValue(line.stem, '')}${textValue(line.branch, '')} ${textValue(line.element, '')}  ${textValue(line.sixRelative, '')}  ${textValue(line.sixGod, '')}${line.isShi ? '  世' : ''}${line.isYing ? '  应' : ''}${line.moving ? '  动' : ''}`,
-    ),
-  ]
 }
 
 function cleanReportForDisplay(value: unknown): string {
@@ -266,6 +307,46 @@ function HexagramPair({ reading }: { reading: Record<string, unknown> | null }) 
           changed
         />
       ) : null}
+    </div>
+  )
+}
+
+function HexagramDetail({ reading }: { reading: Record<string, unknown> | null }) {
+  if (!reading) return <p className="detail-empty">当前没有可展示的卦象。</p>
+  const lines = arrayValue(asRecord(reading.chart).lines).map(asRecord)
+  return (
+    <div className="chart-detail-layout">
+      <div className="chart-visual-panel">
+        <div className="casting-date">
+          <CalendarDays size={16} />
+          <span>{formatCastingDate(reading)}</span>
+        </div>
+        <HexagramPair reading={reading} />
+      </div>
+      <div className="chart-facts" aria-label="排盘信息">
+        {chartSummaryItems(reading).map((item) => (
+          <div key={item.label} className="chart-fact">
+            <span>{item.label}</span>
+            <strong>{item.value}</strong>
+          </div>
+        ))}
+      </div>
+      <div className="yao-table" aria-label="六爻明细">
+        <div className="yao-table-head">六爻明细</div>
+        {[...lines].reverse().map((line) => (
+          <div className="yao-row" key={`yao-${line.position}`}>
+            <span>{textValue(line.position, '')}</span>
+            <strong>{textValue(line.stem, '')}{textValue(line.branch, '')} {textValue(line.element, '')}</strong>
+            <em>{textValue(line.sixRelative, '')}</em>
+            <small>
+              {textValue(line.sixGod, '')}
+              {line.isShi ? ' · 世' : ''}
+              {line.isYing ? ' · 应' : ''}
+              {line.moving ? ' · 动' : ''}
+            </small>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -432,10 +513,7 @@ function DetailBlock({
     chart: '卦象',
     why: '解读详情',
   }[panel]
-  const lines =
-    panel === 'chart'
-      ? chartLines(reading, true)
-      : cleanReportForDisplay(reading?.content ?? '当前没有可展开的完整报告。').split('\n').slice(0, 160)
+  const lines = cleanReportForDisplay(reading?.content ?? '当前没有可展开的完整报告。').split('\n').slice(0, 160)
 
   return (
     <section className="detail-block" aria-label={title}>
@@ -446,10 +524,7 @@ function DetailBlock({
         </button>
       </div>
       {panel === 'chart' ? (
-        <>
-          <HexagramPair reading={reading} />
-          <pre>{lines.join('\n')}</pre>
-        </>
+        <HexagramDetail reading={reading} />
       ) : (
         <div className="markdown-detail">
           <ReactMarkdown>{lines.join('\n')}</ReactMarkdown>
@@ -498,6 +573,80 @@ function ReadingAttachmentPanel({
   )
 }
 
+function CastingProgressBar({ progress }: { progress: CastingProgress }) {
+  const steps: Array<{ stage: Exclude<CastingStage, 'idle' | 'error'>; label: string }> = [
+    { stage: 'casting', label: '排盘' },
+    { stage: 'analysis', label: '分析' },
+    { stage: 'summary', label: '短答' },
+    { stage: 'done', label: '完成' },
+  ]
+  const activeIndex = Math.max(0, steps.findIndex((item) => item.stage === progress.stage))
+  const done = progress.stage === 'done'
+  const error = progress.stage === 'error'
+
+  return (
+    <div className="casting-progress" data-state={progress.stage} aria-label="起卦进度">
+      <div className="casting-progress-head">
+        <span>{progress.label}</span>
+        <strong>{progress.percent}%</strong>
+      </div>
+      <div className="progress-track">
+        <span style={{ width: `${progress.percent}%` }} />
+      </div>
+      <div className="progress-steps">
+        {steps.map((step, index) => {
+          const reached = done || progress.stage === step.stage || index < activeIndex
+          return (
+            <span key={step.stage} data-active={reached ? 'true' : undefined}>
+              {reached ? <CheckCircle2 size={14} /> : <Circle size={14} />}
+              {step.label}
+            </span>
+          )
+        })}
+      </div>
+      {error ? <p>本次起卦没有完成，请调整输入后重试。</p> : null}
+    </div>
+  )
+}
+
+function ReadingTeaserCard({
+  reading,
+  onOpen,
+}: {
+  reading: Record<string, unknown> | null
+  onOpen: (panel: Exclude<DetailPanel, null>) => void
+}) {
+  if (!reading) return null
+  const items = chartSummaryItems(reading).slice(0, 5)
+  return (
+    <section className="reading-teaser" aria-label="详细解读入口">
+      <div>
+        <p className="eyebrow">Reading</p>
+        <h3>本次卦象与详细解读</h3>
+        <span>{formatCastingDate(reading)}</span>
+      </div>
+      <div className="reading-teaser-grid">
+        {items.map((item) => (
+          <div key={item.label}>
+            <span>{item.label}</span>
+            <strong>{item.value}</strong>
+          </div>
+        ))}
+      </div>
+      <div className="reading-teaser-actions">
+        <button type="button" onClick={() => onOpen('chart')}>
+          <FileText size={15} />
+          查看卦象
+        </button>
+        <button type="button" onClick={() => onOpen('why')}>
+          <BookOpen size={15} />
+          展开详细解读
+        </button>
+      </div>
+    </section>
+  )
+}
+
 function DivinationWorkbench({
   method,
   question,
@@ -505,6 +654,7 @@ function DivinationWorkbench({
   analysisMode,
   angles,
   running,
+  progress,
   reading,
   activePanel,
   onMethodChange,
@@ -521,6 +671,7 @@ function DivinationWorkbench({
   analysisMode: AnalysisMode
   angles: number
   running: boolean
+  progress: CastingProgress
   reading: Record<string, unknown> | null
   activePanel: DetailPanel
   onMethodChange: (method: DivinationMethod) => void
@@ -553,6 +704,7 @@ function DivinationWorkbench({
           <span data-active={reading ? 'true' : undefined}>推演</span>
         </div>
       </div>
+      <CastingProgressBar progress={progress} />
 
       <div className="method-grid" role="group" aria-label="起卦方式">
         {METHODS.map((item) => (
@@ -668,18 +820,23 @@ function AuthedApp({
   const [methodInput, setMethodInput] = useState('')
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>('quick')
   const [angles, setAngles] = useState(3)
-  const [workflowRunning, setWorkflowRunning] = useState(false)
   const [workflowError, setWorkflowError] = useState('')
-  const [lastReading, setLastReading] = useState<Record<string, unknown> | null>(null)
+  const [readingsBySession, setReadingsBySession] = useState<Record<string, Record<string, unknown> | null>>({})
+  const [readySessions, setReadySessions] = useState<Record<string, boolean>>({})
+  const [castingProgressBySession, setCastingProgressBySession] = useState<Record<string, CastingProgress>>({})
   const [activePanel, setActivePanel] = useState<DetailPanel>(null)
-  const [conversationReady, setConversationReady] = useState(false)
   const tokenRef = useRef(token)
   const refreshTokenRef = useRef(refreshToken)
   const refreshPromiseRef = useRef<Promise<string> | null>(null)
+  const activeSessionRef = useRef(sessionId)
 
   useEffect(() => {
     tokenRef.current = token
   }, [token])
+
+  useEffect(() => {
+    activeSessionRef.current = sessionId
+  }, [sessionId])
 
   useEffect(() => {
     refreshTokenRef.current = refreshToken
@@ -724,6 +881,15 @@ function AuthedApp({
     [refreshAuth],
   )
 
+  const setSessionProgress = useCallback((targetSessionId: string, progress: CastingProgress) => {
+    setCastingProgressBySession((current) => ({ ...current, [targetSessionId]: progress }))
+  }, [])
+
+  const activeReading = readingsBySession[sessionId] ?? null
+  const activeConversationReady = !!readySessions[sessionId]
+  const activeCastingProgress = castingProgressBySession[sessionId] ?? IDLE_PROGRESS
+  const activeWorkflowRunning = ['casting', 'analysis', 'summary'].includes(activeCastingProgress.stage)
+
   const refreshConversations = useCallback(async () => {
     try {
       const nextConversations = await withAuthRetry((accessToken) => listConversations(accessToken))
@@ -735,10 +901,10 @@ function AuthedApp({
     }
   }, [withAuthRetry])
 
-  const { runtime, setMessages, isRunning } = useOrbitAssistantRuntime({
+  const { runtime, setSessionMessages, isRunning, runningSessions } = useOrbitAssistantRuntime({
     token,
     sessionId,
-    isSendDisabled: !conversationReady || workflowRunning,
+    isSendDisabled: !activeConversationReady || activeWorkflowRunning,
     onSessionResolved: setSessionId,
     onConversationChanged: refreshConversations,
   })
@@ -751,17 +917,19 @@ function AuthedApp({
   }, [refreshConversations])
 
   const activeTitle = useMemo(() => {
-    if (!conversationReady) return '起卦工作台'
+    if (!activeConversationReady) return '起卦工作台'
     return conversations.find((item) => item.sessionId === sessionId)?.title ?? '追问对话'
-  }, [conversationReady, conversations, sessionId])
-  const pageBusy = historyLoading || workflowRunning || isRunning
+  }, [activeConversationReady, conversations, sessionId])
+  const pageBusy = historyLoading || activeWorkflowRunning || isRunning
+  const backgroundTaskCount = Object.entries(castingProgressBySession).filter(([targetSessionId, progress]) =>
+    targetSessionId !== sessionId && ['casting', 'analysis', 'summary'].includes(progress.stage),
+  ).length + Object.keys(runningSessions).filter((item) => item !== sessionId).length
 
   const selectConversation = async (conversation: ConversationSummary) => {
     setSessionId(conversation.sessionId)
     if (isCompactViewport()) setSidebarOpen(false)
-    setLastReading(null)
     setActivePanel(null)
-    setConversationReady(true)
+    setReadySessions((current) => ({ ...current, [conversation.sessionId]: true }))
     setHistoryLoading(true)
     setHistoryError('')
     try {
@@ -775,8 +943,8 @@ function AuthedApp({
           readingPromise,
         ])
       })
-      setMessages(fromApiMessages(apiMessages))
-      setLastReading(reading)
+      setSessionMessages(conversation.sessionId, fromApiMessages(apiMessages))
+      setReadingsBySession((current) => ({ ...current, [conversation.sessionId]: reading }))
     } catch (err) {
       if (isAuthExpiredError(err)) return
       setHistoryError(err instanceof Error ? err.message : '对话加载失败')
@@ -786,14 +954,16 @@ function AuthedApp({
   }
 
   const startNewConversation = () => {
-    setSessionId(makeSessionId())
-    setMessages([])
+    const nextSessionId = makeSessionId()
+    setSessionId(nextSessionId)
+    setSessionMessages(nextSessionId, [])
     setQuestion('')
     setMethodInput('')
     setWorkflowError('')
-    setLastReading(null)
     setActivePanel(null)
-    setConversationReady(false)
+    setReadingsBySession((current) => ({ ...current, [nextSessionId]: null }))
+    setReadySessions((current) => ({ ...current, [nextSessionId]: false }))
+    setSessionProgress(nextSessionId, IDLE_PROGRESS)
     if (isCompactViewport()) setSidebarOpen(false)
   }
 
@@ -818,7 +988,7 @@ function AuthedApp({
 
   const runDivination = async () => {
     const trimmedQuestion = question.trim()
-    if (!trimmedQuestion || workflowRunning) return
+    if (!trimmedQuestion || activeWorkflowRunning) return
 
     const castingBody = buildCastingBody()
     if (!castingBody) {
@@ -832,16 +1002,21 @@ function AuthedApp({
       return
     }
 
-    const nextSessionId = makeSessionId()
-    setSessionId(nextSessionId)
-    setWorkflowRunning(true)
+    const targetSessionId = makeSessionId()
+    setSessionId(targetSessionId)
     setWorkflowError('')
     setActivePanel(null)
-    setMessages([])
+    setReadySessions((current) => ({ ...current, [targetSessionId]: false }))
+    setReadingsBySession((current) => ({ ...current, [targetSessionId]: null }))
+    setSessionMessages(targetSessionId, [])
+    setSessionProgress(targetSessionId, CASTING_PROGRESS.casting)
+    const analysisTimer = window.setTimeout(() => {
+      setSessionProgress(targetSessionId, CASTING_PROGRESS.analysis)
+    }, 450)
 
     try {
       const data = await withAuthRetry((accessToken) => askDivination(accessToken, {
-        sessionId: nextSessionId,
+        sessionId: targetSessionId,
         question: trimmedQuestion,
         message: DEFAULT_DIVINATION_PROMPT,
         timezone: 'Asia/Shanghai',
@@ -851,12 +1026,16 @@ function AuthedApp({
         angles,
         ...castingBody,
       }))
-      const resolvedSession = typeof data.sessionId === 'string' ? data.sessionId : nextSessionId
+      window.clearTimeout(analysisTimer)
+      const resolvedSession = typeof data.sessionId === 'string' ? data.sessionId : targetSessionId
       const assistantId = `assistant_summary_${Date.now().toString(36)}`
-      setSessionId(resolvedSession)
-      setLastReading(data)
-      setConversationReady(true)
-      setMessages([
+      if (activeSessionRef.current === targetSessionId && resolvedSession !== targetSessionId) {
+        setSessionId(resolvedSession)
+      }
+      setReadingsBySession((current) => ({ ...current, [resolvedSession]: data }))
+      setReadySessions((current) => ({ ...current, [resolvedSession]: true }))
+      setSessionProgress(resolvedSession, CASTING_PROGRESS.summary)
+      setSessionMessages(resolvedSession, [
         makeUiMessage('user', trimmedQuestion),
         {
           id: assistantId,
@@ -877,7 +1056,7 @@ function AuthedApp({
       })) {
         if (event.type === 'content' && event.content) {
           summary += event.content
-          setMessages((current) =>
+          setSessionMessages(resolvedSession, (current) =>
             current.map((item) =>
               item.id === assistantId
                 ? { ...item, content: summary, status: { type: 'running' } }
@@ -887,13 +1066,14 @@ function AuthedApp({
         }
         if (event.type === 'done') {
           const finalSummary = cleanReportForDisplay(event.content || summary || '推演完成。')
-          setMessages((current) =>
+          setSessionMessages(resolvedSession, (current) =>
             current.map((item) =>
               item.id === assistantId
                 ? { ...item, content: finalSummary, status: { type: 'complete', reason: 'stop' } }
                 : item,
             ),
           )
+          setSessionProgress(resolvedSession, CASTING_PROGRESS.done)
         }
         if (event.type === 'error') {
           throw new Error(event.error || '短答生成失败')
@@ -901,17 +1081,26 @@ function AuthedApp({
       }
       await refreshConversations()
     } catch (err) {
+      window.clearTimeout(analysisTimer)
       if (isAuthExpiredError(err)) {
         await refreshAuth().catch(() => null)
         setWorkflowError('登录已续期，请重新点击开始推演。')
+        setSessionProgress(targetSessionId, CASTING_PROGRESS.error)
         return
       }
       const message = err instanceof Error ? err.message : '推演失败'
       setWorkflowError(message)
-      setConversationReady(false)
-      setMessages([])
+      setReadySessions((current) => ({ ...current, [targetSessionId]: false }))
+      setSessionProgress(targetSessionId, CASTING_PROGRESS.error)
+      setSessionMessages(targetSessionId, [])
     } finally {
-      setWorkflowRunning(false)
+      window.clearTimeout(analysisTimer)
+      if ((castingProgressBySession[targetSessionId] ?? IDLE_PROGRESS).stage !== 'done') {
+        setCastingProgressBySession((current) => {
+          const progress = current[targetSessionId]
+          return progress?.stage === 'summary' ? { ...current, [targetSessionId]: CASTING_PROGRESS.done } : current
+        })
+      }
     }
   }
 
@@ -959,7 +1148,8 @@ function AuthedApp({
               <p>{activeTitle}</p>
               <span className="thread-status">
                 {pageBusy ? <LoadingSpinner /> : null}
-                {historyLoading ? '同步中' : workflowRunning || isRunning ? '生成中' : '就绪'}
+                {historyLoading ? '同步中' : activeWorkflowRunning || isRunning ? activeCastingProgress.label : '就绪'}
+                {backgroundTaskCount > 0 ? ` · 后台 ${backgroundTaskCount}` : ''}
               </span>
             </div>
 
@@ -971,7 +1161,7 @@ function AuthedApp({
             </div>
           </header>
 
-          {!conversationReady ? (
+          {!activeConversationReady ? (
             <section className="casting-only">
               <DivinationWorkbench
                 method={method}
@@ -979,8 +1169,9 @@ function AuthedApp({
                 methodInput={methodInput}
                 analysisMode={analysisMode}
                 angles={angles}
-                running={workflowRunning}
-                reading={lastReading}
+                running={activeWorkflowRunning}
+                progress={activeCastingProgress}
+                reading={activeReading}
                 activePanel={activePanel}
                 onMethodChange={(nextMethod) => {
                   setMethod(nextMethod)
@@ -1001,17 +1192,21 @@ function AuthedApp({
               <ThreadPrimitive.Viewport className="thread-viewport">
                 <EmptyThread />
                 <ThreadPrimitive.Messages components={{ Message: ChatMessage }} />
+                <ReadingTeaserCard
+                  reading={activeReading}
+                  onOpen={(panel) => setActivePanel(panel)}
+                />
               </ThreadPrimitive.Viewport>
               <div className="composer-footer">
                 <ReadingAttachmentPanel
-                  reading={lastReading}
+                  reading={activeReading}
                   activePanel={activePanel}
                   onPanelChange={setActivePanel}
                 />
                 <ComposerPrimitive.Root className="composer">
                   <ComposerPrimitive.Input
                     className="composer-input"
-                    placeholder={conversationReady ? '继续追问...' : '先在上方完成起卦'}
+                    placeholder={activeConversationReady ? '继续追问...' : '先在上方完成起卦'}
                     submitMode="enter"
                     rows={1}
                   />
