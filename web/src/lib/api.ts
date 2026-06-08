@@ -112,12 +112,12 @@ async function parseResponse<T>(res: Response): Promise<T> {
   return payload.data
 }
 
-export async function inviteLogin(code: string, deviceId: string): Promise<InviteLoginData> {
+export async function inviteLogin(code: string): Promise<InviteLoginData> {
   try {
     const res = await fetch(`${API_BASE}/auth/invite`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, deviceId }),
+      body: JSON.stringify({ code }),
     })
     return parseResponse<InviteLoginData>(res)
   } catch (error) {

@@ -165,7 +165,7 @@ http://127.0.0.1:5173/
 Web 交互流程：
 
 1. 首次访问需要输入长期邀请码。
-2. 邀请码首次使用时会绑定浏览器生成的 `deviceId`，同一邀请码后续需要在同一设备标识下使用；每个邀请码应只发给一个用户。
+2. 邀请码等同于一个长期账号凭据；同一邀请码可在不同设备登录，并回到同一个账号。
 3. 登录后第一屏是起卦工作台，支持自动摇卦、手动六爻、时间、数字、汉字起卦。
 4. 起卦完成后才进入追问对话；对话框固定在底部，等待起卦或回复时会显示转圈加载态。
 5. 对话默认只显示短答。卦象和解读在输入框上方的“起卦资料”按钮中打开，可关闭；卦象会绘制本卦和有动爻时的变卦。
@@ -181,6 +181,51 @@ npm run web:build
 
 ```bash
 npm run invite:reset-bindings
+```
+
+设备绑定已不再用于登录校验；上面的命令仅用于清理旧数据中的历史绑定字段。
+
+### 1.2 测试部署：Vercel + Render + 云数据库
+
+推荐拆分部署：
+
+- 后端 API：Render Web Service，使用仓库根目录的 `render.yaml`。
+- 临时记忆/任务状态：Render Key Value，`render.yaml` 会创建 `orbit-agent-kv` 并通过 `REDIS_URL` 注入后端。
+- 长期数据：MongoDB Atlas，把 Atlas 连接串填入 Render 的 `MONGODB_URI`。
+- 前端：Vercel，使用仓库根目录的 `vercel.json` 构建 `web/`。
+
+后端连接策略：
+
+- 存在 `MONGODB_URI` 时使用 MongoDB Atlas；否则使用 `MONGODB_HOST` / `MONGODB_PORT` / `MONGODB_DATABASE` 本地库。
+- 存在 `REDIS_URL`、`KV_URL` 或 `RENDER_REDIS_URL` 时使用云 Key Value；否则使用 `REDIS_HOST` / `REDIS_PORT` 本地 Redis。
+
+Render 需要填写或确认的环境变量：
+
+```env
+NODE_ENV=production
+MONGODB_URI=mongodb+srv://<user>:<password>@<cluster>/<db>?retryWrites=true&w=majority
+DEEPSEEK_API_KEY=<your_deepseek_key>
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+ZHIPU_API_KEY=<optional_if_using_remote_zhipu_embeddings>
+ZHIPU_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+ORBIT_EMBEDDER=hash
+JWT_SECRET=<generated_by_render_or_manual_secret>
+JWT_REFRESH_SECRET=<generated_by_render_or_manual_secret>
+REDIS_URL=<injected_from_orbit-agent-kv>
+```
+
+Vercel 需要填写的环境变量：
+
+```env
+VITE_ORBIT_API_BASE=https://<your-render-service>.onrender.com/api/v1
+```
+
+本地开发仍可只使用本地 MongoDB/Redis 和 `.env`：
+
+```env
+MONGODB_URI=mongodb://localhost:27017/orbit_agent
+REDIS_HOST=localhost
+REDIS_PORT=6379
 ```
 
 清理后，每个邀请码会在下一次成功登录时重新绑定到对应用户当前设备。

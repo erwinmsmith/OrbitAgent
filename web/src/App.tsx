@@ -46,7 +46,6 @@ import { fromApiMessages, type OrbitUiMessage, useOrbitAssistantRuntime } from '
 const TOKEN_KEY = 'orbit.web.accessToken'
 const REFRESH_TOKEN_KEY = 'orbit.web.refreshToken'
 const USER_KEY = 'orbit.web.user'
-const DEVICE_KEY = 'orbit.web.deviceId'
 const DEFAULT_DIVINATION_PROMPT = '请结合卦象分析、解答问题。'
 
 type DetailPanel = 'chart' | 'why' | null
@@ -83,17 +82,6 @@ const METHODS: Array<{ id: DivinationMethod; label: string; hint: string }> = [
 
 function makeSessionId() {
   return `web_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
-}
-
-function getDeviceId() {
-  const existing = localStorage.getItem(DEVICE_KEY)
-  if (existing) return existing
-  const next =
-    typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID()
-      : `device_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
-  localStorage.setItem(DEVICE_KEY, next)
-  return next
 }
 
 function isAuthExpiredError(error: unknown): boolean {
@@ -412,7 +400,7 @@ function LoginScreen({
     setLoading(true)
     setError('')
     try {
-      const data = await inviteLogin(code, getDeviceId())
+      const data = await inviteLogin(code)
       localStorage.setItem(TOKEN_KEY, data.accessToken)
       localStorage.setItem(REFRESH_TOKEN_KEY, data.refreshToken)
       localStorage.setItem(USER_KEY, JSON.stringify(data.user))
@@ -606,14 +594,16 @@ function ReadingAttachmentPanel({
       <div className="attachment-tools">
         <span>
           <Paperclip size={15} />
-          起卦资料
+          <span>
+            起卦资料
+            <small>AI 先给概要，可在这里打开卦象和完整解读。</small>
+          </span>
         </span>
         <div>
           {button('chart', <FileText size={15} />, '卦象')}
           {button('why', <BookOpen size={15} />, '解读')}
         </div>
       </div>
-      <DetailBlock panel={activePanel} reading={reading} onClose={() => onPanelChange(null)} />
     </div>
   )
 }
@@ -651,44 +641,6 @@ function CastingProgressBar({ progress }: { progress: CastingProgress }) {
       </div>
       {error ? <p>本次起卦没有完成，请调整输入后重试。</p> : null}
     </div>
-  )
-}
-
-function ReadingTeaserCard({
-  reading,
-  onOpen,
-}: {
-  reading: Record<string, unknown> | null
-  onOpen: (panel: Exclude<DetailPanel, null>) => void
-}) {
-  if (!reading) return null
-  const items = chartSummaryItems(reading).slice(0, 5)
-  return (
-    <section className="reading-teaser" aria-label="详细解读入口">
-      <div>
-        <p className="eyebrow">Reading</p>
-        <h3>本次卦象与详细解读</h3>
-        <span>{formatCastingDate(reading)}</span>
-      </div>
-      <div className="reading-teaser-grid">
-        {items.map((item) => (
-          <div key={item.label}>
-            <span>{item.label}</span>
-            <strong>{item.value}</strong>
-          </div>
-        ))}
-      </div>
-      <div className="reading-teaser-actions">
-        <button type="button" onClick={() => onOpen('chart')}>
-          <FileText size={15} />
-          查看卦象
-        </button>
-        <button type="button" onClick={() => onOpen('why')}>
-          <BookOpen size={15} />
-          展开详细解读
-        </button>
-      </div>
-    </section>
   )
 }
 
@@ -971,6 +923,7 @@ function AuthedApp({
   ).length + Object.keys(runningSessions).filter((item) => item !== sessionId).length
 
   const selectConversation = async (conversation: ConversationSummary) => {
+    const hasBackgroundOutput = !!runningSessions[conversation.sessionId]
     setSessionId(conversation.sessionId)
     if (isCompactViewport()) setSidebarOpen(false)
     setActivePanel(null)
@@ -988,7 +941,13 @@ function AuthedApp({
           readingPromise,
         ])
       })
-      setSessionMessages(conversation.sessionId, fromApiMessages(apiMessages))
+      if (hasBackgroundOutput) {
+        setSessionMessages(conversation.sessionId, (current) =>
+          current.length ? current : fromApiMessages(apiMessages),
+        )
+      } else {
+        setSessionMessages(conversation.sessionId, fromApiMessages(apiMessages))
+      }
       setReadingsBySession((current) => ({ ...current, [conversation.sessionId]: reading }))
     } catch (err) {
       if (isAuthExpiredError(err)) return
@@ -1237,10 +1196,7 @@ function AuthedApp({
               <ThreadPrimitive.Viewport className="thread-viewport">
                 <EmptyThread />
                 <ThreadPrimitive.Messages components={{ Message: ChatMessage }} />
-                <ReadingTeaserCard
-                  reading={activeReading}
-                  onOpen={(panel) => setActivePanel(panel)}
-                />
+                <DetailBlock panel={activePanel} reading={activeReading} onClose={() => setActivePanel(null)} />
               </ThreadPrimitive.Viewport>
               <div className="composer-footer">
                 <ReadingAttachmentPanel
