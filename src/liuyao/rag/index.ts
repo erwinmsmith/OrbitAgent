@@ -159,6 +159,33 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   return dot / ((Math.sqrt(na) || 1) * (Math.sqrt(nb) || 1));
 }
 
+function shouldUseLightSearch(): boolean {
+  const explicit = (process.env.ORBIT_RAG_LIGHT_SEARCH || '').toLowerCase();
+  return explicit === '1' || explicit === 'true' || (explicit !== '0' && process.env.NODE_ENV === 'production');
+}
+
+function queryTerms(query: string): string[] {
+  return Array.from(new Set(
+    query
+      .toLowerCase()
+      .split(/[^\w一-鿿]+/)
+      .map((term) => term.trim())
+      .filter((term) => term.length >= 2),
+  )).slice(0, 8);
+}
+
+function lexicalScore(query: string, title: string, text: string, source: string): number {
+  const terms = queryTerms(query);
+  if (terms.length === 0) return 0;
+  const lowerTitle = title.toLowerCase();
+  const haystack = `${title}\n${source}\n${text}`.toLowerCase();
+  let score = 0;
+  for (const term of terms) {
+    if (haystack.includes(term)) score += lowerTitle.includes(term) ? 2 : 1;
+  }
+  return score / terms.length;
+}
+
 /* ────────────────────────────────────────────────────────────────────
  * Document lifecycle
  * ──────────────────────────────────────────────────────────────────── */
@@ -504,8 +531,28 @@ export async function search(
     ? {}
     : { $or: [{ scope: 'system' as const }, { ownerId: requesterId }] };
 
+  if (shouldUseLightSearch()) {
+    const chunks = await KnowledgeChunkModel
+      .find(match, { source: 1, sectionTitle: 1, text: 1, scope: 1 })
+      .lean();
+
+    const scored = chunks.map((c: any) => ({
+      chunk: {
+        id: String(c._id),
+        source: c.source,
+        title: c.sectionTitle,
+        text: c.text,
+        embedding: [],
+        scope: c.scope,
+      } satisfies RagChunk,
+      score: lexicalScore(query, c.sectionTitle ?? '', c.text ?? '', c.source ?? ''),
+    }));
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, k);
+  }
+
   const chunks = await KnowledgeChunkModel
-    .find(match, { source: 1, sectionTitle: 1, text: 1, embedding: 1, scope: 1, _id: 0 })
+    .find(match, { source: 1, sectionTitle: 1, text: 1, embedding: 1, scope: 1 })
     .lean();
 
   if (chunks.length === 0) return [];
@@ -519,7 +566,7 @@ export async function search(
   }
   const scored = chunks.map((c: any) => {
     const chunk: RagChunk = {
-      id: `${c.source}#${c._id ?? ''}`,
+      id: String(c._id),
       source: c.source,
       title: c.sectionTitle,
       text: c.text,
@@ -551,16 +598,15 @@ export async function searchMany(
   query: string;
   hits: Array<{ chunk: RagChunk; score: number }>;
 }>> {
-  // Run queries in parallel — they're independent.
-  const results = await Promise.all(
-    queries.map(async (q) => ({
-      query: q,
-      hits: await search(q, k, requesterId, isAdmin).catch((e) => {
-        logger.warn(`rag.searchMany: query "${q}" failed (${e?.message ?? e}); returning []`);
-        return [];
-      }),
-    })),
-  );
+  const maxQueries = Math.max(1, Number(process.env.ORBIT_RAG_MAX_QUERIES || 4));
+  const results: Array<{ query: string; hits: Array<{ chunk: RagChunk; score: number }> }> = [];
+  for (const q of queries.slice(0, maxQueries)) {
+    const hits = await search(q, k, requesterId, isAdmin).catch((e) => {
+      logger.warn(`rag.searchMany: query "${q}" failed (${e?.message ?? e}); returning []`);
+      return [];
+    });
+    results.push({ query: q, hits });
+  }
   return results;
 }
 

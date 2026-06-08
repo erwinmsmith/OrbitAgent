@@ -1025,7 +1025,7 @@ function AuthedApp({
         message: DEFAULT_DIVINATION_PROMPT,
         timezone: 'Asia/Shanghai',
         datetime: new Date().toISOString(),
-        debug: true,
+        debug: import.meta.env.DEV,
         thinking: analysisMode === 'deep',
         angles,
         ...castingBody,
