@@ -32,7 +32,7 @@ temp/
 *.tmp
 
 # MongoDB data (local dev)
-data/
+/data/
 
 # Redis dump
 dump.rdb
@@ -48,3 +48,4 @@ CLAUDE.md
 
 # Long-lived invite codes for sharing, keep out of git by default
 docs/invite-codes.md
+.vercel
