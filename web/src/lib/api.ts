@@ -10,6 +10,18 @@ export interface ApiEnvelope<T> {
   }
 }
 
+export class ApiError extends Error {
+  code?: string
+  status: number
+
+  constructor(message: string, status: number, code?: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.code = code
+  }
+}
+
 export interface AuthUser {
   _id: string
   email: string
@@ -24,6 +36,11 @@ export interface InviteLoginData {
     label: string
     lastUsedAt?: string
   }
+  accessToken: string
+  refreshToken: string
+}
+
+export interface RefreshTokenData {
   accessToken: string
   refreshToken: string
 }
@@ -86,7 +103,11 @@ export interface DivinationAskBody {
 async function parseResponse<T>(res: Response): Promise<T> {
   const payload = (await res.json()) as ApiEnvelope<T>
   if (!res.ok || !payload.success) {
-    throw new Error(payload.error?.message ?? `Request failed with ${res.status}`)
+    throw new ApiError(
+      payload.error?.message ?? `Request failed with ${res.status}`,
+      res.status,
+      payload.error?.code,
+    )
   }
   return payload.data
 }
@@ -105,6 +126,15 @@ export async function inviteLogin(code: string, deviceId: string): Promise<Invit
     }
     throw error
   }
+}
+
+export async function refreshAccessToken(refreshToken: string): Promise<RefreshTokenData> {
+  const res = await fetch(`${API_BASE}/auth/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refreshToken }),
+  })
+  return parseResponse<RefreshTokenData>(res)
 }
 
 export async function listConversations(token: string): Promise<ConversationSummary[]> {
@@ -176,8 +206,11 @@ export async function* streamDivinationSummary(
     body: JSON.stringify(body),
   })
 
-  if (!res.ok || !res.body) {
-    throw new Error(`Summary stream failed with ${res.status}`)
+  if (!res.ok) {
+    await throwStreamError(res, 'Summary stream failed')
+  }
+  if (!res.body) {
+    throw new ApiError('Summary stream failed with empty response', res.status)
   }
 
   yield* readSseStream(res.body)
@@ -202,11 +235,28 @@ export async function* streamChat(
     signal,
   })
 
-  if (!res.ok || !res.body) {
-    throw new Error(`Stream failed with ${res.status}`)
+  if (!res.ok) {
+    await throwStreamError(res, 'Stream failed')
+  }
+  if (!res.body) {
+    throw new ApiError('Stream failed with empty response', res.status)
   }
 
   yield* readSseStream(res.body)
+}
+
+async function throwStreamError(res: Response, fallback: string): Promise<never> {
+  try {
+    const payload = (await res.json()) as ApiEnvelope<unknown>
+    throw new ApiError(
+      payload.error?.message ?? `${fallback} with ${res.status}`,
+      res.status,
+      payload.error?.code,
+    )
+  } catch (error) {
+    if (error instanceof ApiError) throw error
+    throw new ApiError(`${fallback} with ${res.status}`, res.status)
+  }
 }
 
 async function* readSseStream(body: ReadableStream<Uint8Array>): AsyncGenerator<StreamEvent> {

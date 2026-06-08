@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AssistantRuntimeProvider,
   ComposerPrimitive,
@@ -25,11 +25,13 @@ import {
 } from 'lucide-react'
 import {
   askDivination,
+  ApiError,
   deleteConversation,
   inviteLogin,
   listConversations,
   loadDivinationReading,
   loadConversationMessages,
+  refreshAccessToken,
   streamDivinationSummary,
   type AuthUser,
   type ConversationSummary,
@@ -39,6 +41,7 @@ import {
 import { fromApiMessages, type OrbitUiMessage, useOrbitAssistantRuntime } from './hooks/useOrbitAssistantRuntime'
 
 const TOKEN_KEY = 'orbit.web.accessToken'
+const REFRESH_TOKEN_KEY = 'orbit.web.refreshToken'
 const USER_KEY = 'orbit.web.user'
 const DEVICE_KEY = 'orbit.web.deviceId'
 const DEFAULT_DIVINATION_PROMPT = '请结合卦象分析、解答问题。'
@@ -67,6 +70,13 @@ function getDeviceId() {
       : `device_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
   localStorage.setItem(DEVICE_KEY, next)
   return next
+}
+
+function isAuthExpiredError(error: unknown): boolean {
+  if (error instanceof ApiError) {
+    return error.code === 'TOKEN_EXPIRED' || error.status === 401
+  }
+  return error instanceof Error && error.message === 'Token has expired'
 }
 
 function isCompactViewport() {
@@ -260,7 +270,11 @@ function HexagramPair({ reading }: { reading: Record<string, unknown> | null }) 
   )
 }
 
-function LoginScreen({ onLogin }: { onLogin: (token: string, user: AuthUser) => void }) {
+function LoginScreen({
+  onLogin,
+}: {
+  onLogin: (token: string, refreshToken: string, user: AuthUser) => void
+}) {
   const [code, setCode] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -274,8 +288,9 @@ function LoginScreen({ onLogin }: { onLogin: (token: string, user: AuthUser) => 
     try {
       const data = await inviteLogin(code, getDeviceId())
       localStorage.setItem(TOKEN_KEY, data.accessToken)
+      localStorage.setItem(REFRESH_TOKEN_KEY, data.refreshToken)
       localStorage.setItem(USER_KEY, JSON.stringify(data.user))
-      onLogin(data.accessToken, data.user)
+      onLogin(data.accessToken, data.refreshToken, data.user)
     } catch (err) {
       setError(err instanceof Error ? err.message : '邀请码不可用')
     } finally {
@@ -632,11 +647,15 @@ function DivinationWorkbench({
 
 function AuthedApp({
   token,
+  refreshToken,
   user,
+  onTokenRefresh,
   onLogout,
 }: {
   token: string
+  refreshToken: string
   user: AuthUser
+  onTokenRefresh: (token: string, refreshToken: string) => void
   onLogout: () => void
 }) {
   const [sessionId, setSessionId] = useState(makeSessionId)
@@ -654,16 +673,67 @@ function AuthedApp({
   const [lastReading, setLastReading] = useState<Record<string, unknown> | null>(null)
   const [activePanel, setActivePanel] = useState<DetailPanel>(null)
   const [conversationReady, setConversationReady] = useState(false)
+  const tokenRef = useRef(token)
+  const refreshTokenRef = useRef(refreshToken)
+  const refreshPromiseRef = useRef<Promise<string> | null>(null)
+
+  useEffect(() => {
+    tokenRef.current = token
+  }, [token])
+
+  useEffect(() => {
+    refreshTokenRef.current = refreshToken
+  }, [refreshToken])
+
+  const refreshAuth = useCallback(async () => {
+    if (!refreshTokenRef.current) {
+      onLogout()
+      throw new Error('登录已过期，请重新输入邀请码')
+    }
+
+    if (!refreshPromiseRef.current) {
+      refreshPromiseRef.current = refreshAccessToken(refreshTokenRef.current)
+        .then((data) => {
+          tokenRef.current = data.accessToken
+          refreshTokenRef.current = data.refreshToken
+          onTokenRefresh(data.accessToken, data.refreshToken)
+          return data.accessToken
+        })
+        .catch((error) => {
+          onLogout()
+          throw error
+        })
+        .finally(() => {
+          refreshPromiseRef.current = null
+        })
+    }
+
+    return refreshPromiseRef.current
+  }, [onLogout, onTokenRefresh])
+
+  const withAuthRetry = useCallback(
+    async <T,>(operation: (accessToken: string) => Promise<T>): Promise<T> => {
+      try {
+        return await operation(tokenRef.current)
+      } catch (error) {
+        if (!isAuthExpiredError(error)) throw error
+        const nextToken = await refreshAuth()
+        return operation(nextToken)
+      }
+    },
+    [refreshAuth],
+  )
 
   const refreshConversations = useCallback(async () => {
     try {
-      const nextConversations = await listConversations(token)
+      const nextConversations = await withAuthRetry((accessToken) => listConversations(accessToken))
       setConversations(nextConversations)
       setHistoryError('')
     } catch (err) {
+      if (isAuthExpiredError(err)) return
       setHistoryError(err instanceof Error ? err.message : '历史加载失败')
     }
-  }, [token])
+  }, [withAuthRetry])
 
   const { runtime, setMessages, isRunning } = useOrbitAssistantRuntime({
     token,
@@ -695,13 +765,20 @@ function AuthedApp({
     setHistoryLoading(true)
     setHistoryError('')
     try {
-      const [apiMessages, reading] = await Promise.all([
-        loadConversationMessages(token, conversation.sessionId),
-        loadDivinationReading(token, conversation.sessionId).catch(() => null),
-      ])
+      const [apiMessages, reading] = await withAuthRetry(async (accessToken) => {
+        const readingPromise = loadDivinationReading(accessToken, conversation.sessionId).catch((error) => {
+          if (isAuthExpiredError(error)) throw error
+          return null
+        })
+        return Promise.all([
+          loadConversationMessages(accessToken, conversation.sessionId),
+          readingPromise,
+        ])
+      })
       setMessages(fromApiMessages(apiMessages))
       setLastReading(reading)
     } catch (err) {
+      if (isAuthExpiredError(err)) return
       setHistoryError(err instanceof Error ? err.message : '对话加载失败')
     } finally {
       setHistoryLoading(false)
@@ -721,7 +798,7 @@ function AuthedApp({
   }
 
   const removeConversation = async (conversation: ConversationSummary) => {
-    await deleteConversation(token, conversation.sessionId)
+    await withAuthRetry((accessToken) => deleteConversation(accessToken, conversation.sessionId))
     if (conversation.sessionId === sessionId) startNewConversation()
     await refreshConversations()
   }
@@ -763,7 +840,7 @@ function AuthedApp({
     setMessages([])
 
     try {
-      const data = await askDivination(token, {
+      const data = await withAuthRetry((accessToken) => askDivination(accessToken, {
         sessionId: nextSessionId,
         question: trimmedQuestion,
         message: DEFAULT_DIVINATION_PROMPT,
@@ -773,7 +850,7 @@ function AuthedApp({
         thinking: analysisMode === 'deep',
         angles,
         ...castingBody,
-      })
+      }))
       const resolvedSession = typeof data.sessionId === 'string' ? data.sessionId : nextSessionId
       const assistantId = `assistant_summary_${Date.now().toString(36)}`
       setSessionId(resolvedSession)
@@ -791,7 +868,7 @@ function AuthedApp({
       ])
 
       let summary = ''
-      for await (const event of streamDivinationSummary(token, {
+      for await (const event of streamDivinationSummary(tokenRef.current, {
         sessionId: resolvedSession,
         question: trimmedQuestion,
         chart: data.chart,
@@ -824,6 +901,11 @@ function AuthedApp({
       }
       await refreshConversations()
     } catch (err) {
+      if (isAuthExpiredError(err)) {
+        await refreshAuth().catch(() => null)
+        setWorkflowError('登录已续期，请重新点击开始推演。')
+        return
+      }
       const message = err instanceof Error ? err.message : '推演失败'
       setWorkflowError(message)
       setConversationReady(false)
@@ -948,6 +1030,7 @@ function AuthedApp({
 
 function App() {
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) ?? '')
+  const [refreshToken, setRefreshToken] = useState(() => localStorage.getItem(REFRESH_TOKEN_KEY) ?? '')
   const [user, setUser] = useState<AuthUser | null>(() => {
     const raw = localStorage.getItem(USER_KEY)
     if (!raw) return null
@@ -960,23 +1043,42 @@ function App() {
 
   const logout = () => {
     localStorage.removeItem(TOKEN_KEY)
+    localStorage.removeItem(REFRESH_TOKEN_KEY)
     localStorage.removeItem(USER_KEY)
     setToken('')
+    setRefreshToken('')
     setUser(null)
   }
 
-  if (!token || !user) {
+  if (!token || !refreshToken || !user) {
     return (
       <LoginScreen
-        onLogin={(nextToken, nextUser) => {
+        onLogin={(nextToken, nextRefreshToken, nextUser) => {
+          localStorage.setItem(TOKEN_KEY, nextToken)
+          localStorage.setItem(REFRESH_TOKEN_KEY, nextRefreshToken)
+          localStorage.setItem(USER_KEY, JSON.stringify(nextUser))
           setToken(nextToken)
+          setRefreshToken(nextRefreshToken)
           setUser(nextUser)
         }}
       />
     )
   }
 
-  return <AuthedApp token={token} user={user} onLogout={logout} />
+  return (
+    <AuthedApp
+      token={token}
+      refreshToken={refreshToken}
+      user={user}
+      onTokenRefresh={(nextToken, nextRefreshToken) => {
+        localStorage.setItem(TOKEN_KEY, nextToken)
+        localStorage.setItem(REFRESH_TOKEN_KEY, nextRefreshToken)
+        setToken(nextToken)
+        setRefreshToken(nextRefreshToken)
+      }}
+      onLogout={logout}
+    />
+  )
 }
 
 export default App
