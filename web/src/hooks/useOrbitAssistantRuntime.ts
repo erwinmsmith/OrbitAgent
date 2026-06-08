@@ -60,12 +60,14 @@ export function useOrbitAssistantRuntime({
 }: UseOrbitRuntimeOptions) {
   const [messages, setMessages] = useState<OrbitUiMessage[]>([])
   const [isRunning, setIsRunning] = useState(false)
+  const isRunningRef = useRef(false)
   const abortRef = useRef<AbortController | null>(null)
 
   const onNew = useCallback(
     async (message: AppendMessage) => {
       const text = textFromAppendMessage(message)
-      if (!text || isRunning) return
+      if (!text || isRunningRef.current) return
+      isRunningRef.current = true
 
       const userMessage: OrbitUiMessage = {
         id: createId('user'),
@@ -153,10 +155,11 @@ export function useOrbitAssistantRuntime({
         )
       } finally {
         if (abortRef.current === controller) abortRef.current = null
+        isRunningRef.current = false
         setIsRunning(false)
       }
     },
-    [isRunning, onConversationChanged, onSessionResolved, sessionId, token],
+    [onConversationChanged, onSessionResolved, sessionId, token],
   )
 
   const runtime = useExternalStoreRuntime({

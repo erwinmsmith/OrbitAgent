@@ -160,6 +160,7 @@ export async function rebuildRag(token: string): Promise<Record<string, unknown>
 export async function* streamDivinationSummary(
   token: string,
   body: {
+    sessionId?: string
     question: string
     chart: unknown
     content: string

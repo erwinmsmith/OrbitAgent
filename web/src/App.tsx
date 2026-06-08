@@ -161,7 +161,7 @@ function chartLines(reading: Record<string, unknown> | null, full = false): stri
 function cleanReportForDisplay(value: unknown): string {
   return String(value || '')
     .replace(/\n## 引用[\s\S]*$/m, '')
-    .replace(/\s*\[cite:[^\]]+\]/g, '')
+    .replace(/\s*(?:\[|【)cite:[^\]】]+(?:\]|】)/g, '')
     .replace(/\[[0-9,\s]+\]/g, '')
     .trim()
 }
@@ -792,6 +792,7 @@ function AuthedApp({
 
       let summary = ''
       for await (const event of streamDivinationSummary(token, {
+        sessionId: resolvedSession,
         question: trimmedQuestion,
         chart: data.chart,
         content: cleanReportForDisplay(data.content),

@@ -61,6 +61,7 @@ import {
 } from '../core/memory/ChartStore';
 import { getTemporaryMemory } from '../core/memory/TemporaryMemory';
 import { getPermanentMemory } from '../core/memory/PermanentMemory';
+import { MessageModel } from '../models/Conversation';
 import { getAgent } from '../core/agents/AgentLoader';
 import { getLLMManager } from '../core/llm/LLMFactory';
 import type { LLMMessage } from '../core/llm/types';
@@ -90,6 +91,38 @@ function userIdOrThrow(req: Request): string {
     throw new AppError('UNAUTHORIZED', 'User ID required (login first)', HTTP_STATUS.UNAUTHORIZED);
   }
   return u;
+}
+
+async function saveVisibleDivinationSummary(
+  userId: string,
+  sessionId: string | undefined,
+  summary: string,
+): Promise<void> {
+  const trimmed = summary.trim();
+  if (!sessionId || !trimmed) return;
+
+  const permanentMemory = getPermanentMemory();
+  const conversation = await permanentMemory.getConversationBySessionId(sessionId, userId);
+  if (!conversation) return;
+
+  await MessageModel.findOneAndUpdate(
+    {
+      conversationId: conversation.id,
+      role: 'assistant',
+      $or: [
+        { 'metadata.chartKey': { $exists: true } },
+        { 'metadata.report': { $exists: true } },
+        { 'metadata.chart': { $exists: true } },
+      ],
+    },
+    {
+      $set: {
+        'metadata.summary': trimmed,
+        'metadata.displayContent': trimmed,
+      },
+    },
+    { sort: { timestamp: -1 } },
+  );
 }
 
 function isAdmin(req: Request): boolean {
@@ -261,7 +294,7 @@ function appendReportExtras(markdown: string, report: AnalysisReport, options: {
 function formatCitationDisplay(markdown: string, options: { showCitations: boolean }): string {
   if (options.showCitations) return markdown;
   return markdown
-    .replace(/\s*\[cite:[^\]]+\]/g, '')
+    .replace(/\s*(?:\[|【)cite:[^\]】]+(?:\]|】)/g, '')
     .replace(/\n{0,2}#{1,6}\s*引用[\s\S]*$/m, '')
     .trim();
 }
@@ -389,6 +422,7 @@ router.post('/ask', asyncHandler(async (req: Request, res: Response) => {
       modelProvider: body.provider || agent?.provider,
       metadata: {
         question: body.question,
+        displayContent: body.question,
         chartKey,
         casting,
       },
@@ -403,6 +437,7 @@ router.post('/ask', asyncHandler(async (req: Request, res: Response) => {
         chart,
         report: analysis.report,
         content,
+        hiddenFromChat: true,
       },
     }),
   ]);
@@ -460,7 +495,7 @@ router.post('/summarize', asyncHandler(async (req: Request, res: Response) => {
 
 router.post('/summarize/stream', async (req: Request, res: Response) => {
   try {
-    userIdOrThrow(req);
+    const userId = userIdOrThrow(req);
     const body = req.body || {};
     if (!body.content && !body.reportText) {
       res.status(HTTP_STATUS.BAD_REQUEST).json({
@@ -486,6 +521,9 @@ router.post('/summarize/stream', async (req: Request, res: Response) => {
         fullContent += chunk.content;
         res.write(`data: ${JSON.stringify({ type: 'content', content: chunk.content })}\n\n`);
       } else if (chunk.type === 'done') {
+        await saveVisibleDivinationSummary(userId, body.sessionId, fullContent).catch(error => {
+          logger.warn('[Divination summarize stream] failed to persist summary:', error);
+        });
         res.write(`data: ${JSON.stringify({ type: 'done', content: fullContent, usage: chunk.usage })}\n\n`);
       } else if (chunk.type === 'error') {
         res.write(`data: ${JSON.stringify({ type: 'error', error: chunk.error })}\n\n`);

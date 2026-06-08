@@ -10,6 +10,7 @@ import { getTokenService } from '../services/TokenService';
 import { getAgent } from '../core/agents/AgentLoader';
 import { getPromptManager } from '../core/prompts/PromptManager';
 import { getChart } from '../core/memory/ChartStore';
+import type { PermanentMessage } from '../core/memory/types';
 import DivinationTool from '../core/tools/builtins/DivinationTool';
 import { generateSessionId, generateMessageId, now } from '../utils/helpers';
 import { logger } from '../utils/logger';
@@ -59,6 +60,60 @@ function sendSSEError(res: Response, errorCode: string, errorMessage: string, se
   logger.warn(`[SSE Error] ${errorCode}: ${errorMessage} | sessionId: ${sessionId || 'none'}`);
   res.write(`data: ${JSON.stringify({ type: 'error', error: errorMessage, code: errorCode })}\n\n`);
   res.end();
+}
+
+function metaText(metadata: Record<string, any> | undefined, key: string): string {
+  const value = metadata?.[key];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function isDivinationArtifact(message: PermanentMessage): boolean {
+  const metadata = message.metadata || {};
+  return Boolean(
+    metadata.chartKey ||
+    metadata.chart ||
+    metadata.report ||
+    metadata.casting ||
+    metadata.question,
+  );
+}
+
+function toVisibleConversationMessages(messages: PermanentMessage[]): PermanentMessage[] {
+  const visible = messages.flatMap(message => {
+    const metadata = message.metadata || {};
+    const displayContent = metaText(metadata, 'displayContent');
+    if (displayContent) return [{ ...message, content: displayContent }];
+
+    if (!isDivinationArtifact(message)) return [message];
+
+    if (message.role === 'user') {
+      const question = metaText(metadata, 'question');
+      return question ? [{ ...message, content: question }] : [];
+    }
+
+    if (message.role === 'assistant') {
+      const summary = metaText(metadata, 'summary');
+      return summary ? [{ ...message, content: summary }] : [];
+    }
+
+    return [];
+  });
+
+  return visible.reduce<PermanentMessage[]>((deduped, message) => {
+    const timestamp = new Date(message.timestamp).getTime();
+    const isRapidDuplicate = deduped.slice(-2).some(previous => {
+      const previousTimestamp = new Date(previous.timestamp).getTime();
+      return (
+        previous.role === message.role &&
+        previous.content === message.content &&
+        Number.isFinite(timestamp) &&
+        Number.isFinite(previousTimestamp) &&
+        Math.abs(timestamp - previousTimestamp) <= 2000
+      );
+    });
+    if (!isRapidDuplicate) deduped.push(message);
+    return deduped;
+  }, []);
 }
 
 // ============================================================
@@ -872,7 +927,7 @@ router.get('/conversations/:sessionId/messages', asyncHandler(async (req: Reques
 
   res.json({
     success: true,
-    data: messages,
+    data: toVisibleConversationMessages(messages),
   });
 }));
 
@@ -908,7 +963,7 @@ router.get('/:sessionId', asyncHandler(async (req: Request, res: Response) => {
 
   res.json({
     success: true,
-    data: messages,
+    data: toVisibleConversationMessages(messages),
   });
 }));
 
