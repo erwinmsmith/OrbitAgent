@@ -726,7 +726,7 @@ h1 {
   border: 1px solid rgba(22, 116, 95, 0.16);
   border-radius: var(--radius);
   background: rgba(255, 253, 247, 0.7);
-  overflow: hidden;
+  overflow: auto;
 }
 
 .casting-date {
@@ -740,75 +740,134 @@ h1 {
   font-weight: 800;
 }
 
-.hexagram-pair {
+.traditional-chart {
+  min-width: 640px;
+  padding: 16px 18px 18px;
+  color: var(--ink);
+}
+
+.traditional-chart-header {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 22px;
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 900;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.traditional-chart-header em,
+.chart-red {
+  color: var(--cinnabar);
+  font-style: normal;
+}
+
+.traditional-chart-columns {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  padding: 12px;
+  grid-template-columns: repeat(2, minmax(280px, 1fr));
+  gap: 30px;
+  align-items: start;
 }
 
-.hexagram-figure {
-  border: 1px solid rgba(22, 116, 95, 0.18);
-  border-radius: var(--radius);
-  background:
-    linear-gradient(180deg, rgba(255, 253, 247, 0.96), rgba(248, 247, 241, 0.78));
-  padding: 12px 14px 14px;
+.traditional-chart-columns[data-single='true'] {
+  grid-template-columns: minmax(320px, 0.62fr);
+  justify-content: center;
 }
 
-.hexagram-title {
-  display: grid;
-  gap: 4px;
-  margin-bottom: 14px;
-  text-align: center;
+.traditional-hexagram {
+  min-width: 0;
 }
 
-.hexagram-title strong {
+.traditional-title {
+  display: flex;
+  justify-content: center;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 18px;
   color: var(--ink);
   font-family: var(--font-display);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.traditional-title strong {
+  font-size: 20px;
+  font-weight: 900;
+}
+
+.traditional-title span {
   font-size: 18px;
+  font-weight: 800;
+}
+
+.traditional-lines {
+  display: grid;
+  gap: 12px;
+}
+
+.traditional-line-wrap {
+  min-height: 38px;
+}
+
+.traditional-line-row {
+  display: grid;
+  grid-template-columns: 42px 24px minmax(104px, 1fr) 74px 22px;
+  gap: 8px;
+  align-items: center;
+  min-height: 28px;
+  font-size: 18px;
+  font-weight: 800;
   line-height: 1.2;
 }
 
-.hexagram-title span {
-  color: var(--muted);
-  font-size: 12px;
+.line-god,
+.line-marker,
+.moving-mark {
+  text-align: center;
+  white-space: nowrap;
 }
 
-.hexagram-lines {
-  display: grid;
-  gap: 8px;
-  max-width: 150px;
-  margin: 0 auto;
+.line-entity {
+  min-width: 0;
+  white-space: nowrap;
 }
 
-.hex-line {
-  height: 12px;
+.line-marker,
+.moving-mark {
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 900;
+}
+
+.traditional-line-symbol {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
-  position: relative;
+  align-items: center;
+  width: 72px;
+  height: 12px;
 }
 
-.hex-line span {
-  display: block;
-  border-radius: 999px;
-  background: var(--ink);
-}
-
-.hex-line[data-yang='true'] {
+.traditional-line-symbol[data-yang='true'] {
   grid-template-columns: 1fr;
 }
 
-.hex-line[data-moving='true']::after {
-  content: '';
-  position: absolute;
-  right: -2px;
-  top: 50%;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--cinnabar);
-  transform: translate(100%, -50%);
+.traditional-line-symbol span {
+  display: block;
+  height: 10px;
+  background: var(--ink);
+}
+
+.hidden-line-note {
+  margin-left: 74px;
+  margin-top: 2px;
+  color: var(--cinnabar);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.15;
+  white-space: nowrap;
 }
 
 .chart-facts {
@@ -1362,28 +1421,43 @@ h1 {
     grid-template-columns: 1fr;
   }
 
-  .hexagram-pair {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .traditional-chart {
+    min-width: 600px;
+    padding: 14px;
+  }
+
+  .traditional-chart-header {
+    font-size: 19px;
     gap: 8px;
-    padding: 10px;
+    margin-bottom: 18px;
   }
 
-  .hexagram-figure {
-    padding: 10px 8px 12px;
+  .traditional-chart-columns {
+    gap: 22px;
+    grid-template-columns: repeat(2, minmax(260px, 1fr));
   }
 
-  .hexagram-title strong {
+  .traditional-title strong {
+    font-size: 18px;
+  }
+
+  .traditional-title span {
     font-size: 16px;
   }
 
-  .hexagram-lines {
-    max-width: 104px;
-    gap: 6px;
+  .traditional-line-row {
+    grid-template-columns: 38px 22px minmax(96px, 1fr) 66px 20px;
+    gap: 7px;
+    font-size: 16px;
   }
 
-  .hex-line {
-    height: 10px;
-    gap: 11px;
+  .traditional-line-symbol {
+    width: 66px;
+    gap: 14px;
+  }
+
+  .hidden-line-note {
+    margin-left: 67px;
   }
 
   .yao-row {

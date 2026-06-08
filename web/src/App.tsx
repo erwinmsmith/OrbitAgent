@@ -231,28 +231,63 @@ function hasChangedHexagram(reading: Record<string, unknown> | null): boolean {
   return arrayValue(chart.movingLines).length > 0
 }
 
-function HexagramLine({
-  yang,
-  moving,
-}: {
-  yang: boolean
-  moving?: boolean
-}) {
+function lineEntity(line: Record<string, unknown>, changed = false): string {
+  const prefix = changed ? 'changed' : ''
+  const field = (name: string, fallback = '') => {
+    const changedName = prefix ? `${prefix}${name[0].toUpperCase()}${name.slice(1)}` : name
+    return textValue(line[changedName], textValue(line[name], fallback))
+  }
+  return `${field('sixRelative')}${field('stem')}${field('branch')}${field('element')}`.replace(/\?/g, '')
+}
+
+function hiddenLineText(line: Record<string, unknown>): string {
+  const direct = textValue(line.hiddenText, '')
+  if (direct) return direct
+  const hidden = asRecord(line.hiddenGod || line.fushen || line.hidden)
+  if (Object.keys(hidden).length) return lineEntity(hidden)
+  const hiddenList = arrayValue(line.hiddenGods || line.fushenList).map(asRecord).map((item) => lineEntity(item)).filter(Boolean)
+  return hiddenList.join('、')
+}
+
+function hexagramSubtitle(hexagram: Record<string, unknown>): string {
+  const palace = textValue(hexagram.palace, '').replace(/宫$/, '')
+  const palaceType = textValue(hexagram.palaceType, '')
+  return [palace, palaceType].filter(Boolean).join('·')
+}
+
+function ChartLineSymbol({ yang }: { yang: boolean }) {
   return (
-    <div className="hex-line" data-yang={yang ? 'true' : undefined} data-moving={moving ? 'true' : undefined}>
-      {yang ? (
-        <span />
-      ) : (
-        <>
-          <span />
-          <span />
-        </>
-      )}
+    <span className="traditional-line-symbol" data-yang={yang ? 'true' : undefined}>
+      <span />
+      {!yang ? <span /> : null}
+    </span>
+  )
+}
+
+function TraditionalChartHeader({ reading }: { reading: Record<string, unknown> | null }) {
+  const time = chartTime(reading)
+  const pillar = (key: 'year' | 'month' | 'day' | 'hour') => {
+    const ready = textValue(time[`${key}Pillar`], '')
+    if (ready) return ready
+    return `${textValue(time[`${key}Stem`], '')}${textValue(time[`${key}Branch`], '')}`
+  }
+  const xunkong = Array.isArray(time.xunkong) ? time.xunkong.join('') : textValue(time.xunkong, '')
+  return (
+    <div className="traditional-chart-header" aria-label="起卦四柱">
+      <span>{pillar('year')}年</span>
+      <span className="chart-red">{pillar('month')}月</span>
+      <span className="chart-red">{pillar('day')}日</span>
+      <span>{pillar('hour')}时</span>
+      {xunkong ? (
+        <span>
+          （旬空 <em>{xunkong}</em>）
+        </span>
+      ) : null}
     </div>
   )
 }
 
-function HexagramFigure({
+function TraditionalHexagramColumn({
   title,
   subtitle,
   lines,
@@ -265,48 +300,58 @@ function HexagramFigure({
 }) {
   const ordered = [...lines].sort((a, b) => Number(b.position || 0) - Number(a.position || 0))
   return (
-    <div className="hexagram-figure" data-changed={changed ? 'true' : undefined}>
-      <div className="hexagram-title">
+    <div className="traditional-hexagram" data-changed={changed ? 'true' : undefined}>
+      <div className="traditional-title">
         <strong>{title}</strong>
-        <span>{subtitle}</span>
+        {subtitle ? <span>（{subtitle}）</span> : null}
       </div>
-      <div className="hexagram-lines" aria-label={title}>
-        {ordered.map((line) => (
-          <HexagramLine
-            key={`${title}-${line.position}`}
-            yang={isYang(changed ? line.changedYinYang : line.yinYang)}
-            moving={!!line.moving}
-          />
-        ))}
+      <div className="traditional-lines" aria-label={title}>
+        {ordered.map((line) => {
+          const hidden = hiddenLineText(line)
+          return (
+            <div className="traditional-line-wrap" key={`${title}-${line.position}`}>
+              <div className="traditional-line-row">
+                <span className="line-god">{changed ? '' : textValue(line.sixGod, '')}</span>
+                {changed && line.moving ? <span className="moving-mark">O</span> : <span className="moving-mark" />}
+                <span className="line-entity">{lineEntity(line, changed)}</span>
+                <ChartLineSymbol yang={isYang(changed ? line.changedYinYang : line.yinYang)} />
+                <span className="line-marker">{line.isShi ? '世' : line.isYing ? '应' : ''}</span>
+              </div>
+              {!changed && hidden ? <div className="hidden-line-note">↑伏：{hidden}</div> : null}
+            </div>
+          )
+        })}
       </div>
     </div>
   )
 }
 
-function HexagramPair({ reading }: { reading: Record<string, unknown> | null }) {
+function TraditionalHexagramChart({ reading }: { reading: Record<string, unknown> | null }) {
   if (!reading) return null
   const chart = asRecord(reading.chart)
   const original = asRecord(chart.originalHexagram)
   const changed = asRecord(chart.changedHexagram)
   const lines = arrayValue(chart.lines).map(asRecord)
-  const moving = arrayValue(chart.movingLines).join('、') || '无'
   const showChanged = hasChangedHexagram(reading)
 
   return (
-    <div className="hexagram-pair">
-      <HexagramFigure
+    <div className="traditional-chart">
+      <TraditionalChartHeader reading={reading} />
+      <div className="traditional-chart-columns" data-single={!showChanged ? 'true' : undefined}>
+        <TraditionalHexagramColumn
         title={textValue(original.fullName, textValue(original.name, '本卦'))}
-        subtitle={`${textValue(original.palace)}宫 · 动爻 ${moving}`}
+        subtitle={hexagramSubtitle(original)}
         lines={lines}
       />
       {showChanged ? (
-        <HexagramFigure
+        <TraditionalHexagramColumn
           title={textValue(changed.fullName, textValue(changed.name, '变卦'))}
-          subtitle={`${textValue(changed.palace)}宫 · ${textValue(changed.element)}`}
+          subtitle={hexagramSubtitle(changed)}
           lines={lines}
           changed
         />
       ) : null}
+      </div>
     </div>
   )
 }
@@ -321,7 +366,7 @@ function HexagramDetail({ reading }: { reading: Record<string, unknown> | null }
           <CalendarDays size={16} />
           <span>{formatCastingDate(reading)}</span>
         </div>
-        <HexagramPair reading={reading} />
+        <TraditionalHexagramChart reading={reading} />
       </div>
       <div className="chart-facts" aria-label="排盘信息">
         {chartSummaryItems(reading).map((item) => (
