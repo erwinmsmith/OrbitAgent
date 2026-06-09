@@ -26,6 +26,10 @@ Modular conversation AI agent backend service with multi-user LLM support.
 - MongoDB
 - Redis
 
+Local development can use local MongoDB/Redis services. Production can use
+managed services by setting connection-string environment variables; the
+application automatically prefers those over host/port settings.
+
 ### 1. Install Dependencies
 
 ```bash
@@ -75,6 +79,54 @@ npm start
 ```
 
 Server runs at: `http://localhost:3000`
+
+---
+
+## Cloud Database and Deployment
+
+The framework supports local services and managed cloud services with the same
+runtime code:
+
+- MongoDB: set `MONGODB_URI` to a full MongoDB connection string, such as a
+  MongoDB Atlas URI. If unset, the app builds a local URI from
+  `MONGODB_HOST`, `MONGODB_PORT`, `MONGODB_DATABASE`, `MONGODB_USERNAME`, and
+  `MONGODB_PASSWORD`.
+- Redis: set `REDIS_URL`, `KV_URL`, or `RENDER_REDIS_URL` to a managed Redis or
+  Render Key Value connection string. If unset, the app connects with
+  `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, and `REDIS_DB`.
+- TLS: `rediss://` URLs enable TLS automatically. You can also set
+  `REDIS_TLS=true` for providers that require TLS with a `redis://` URL.
+
+The repository includes a generic `render.yaml` blueprint with:
+
+- one Node web service for the API
+- one Render Key Value instance for temporary memory
+- generated JWT secrets
+- secret placeholders for `MONGODB_URI` and provider API keys
+
+For a Render + MongoDB Atlas deployment:
+
+1. Create or connect a MongoDB Atlas cluster.
+2. Add the Render outbound source to the Atlas IP access list. For temporary
+   testing, `0.0.0.0/0` is the simplest option; for production, restrict this
+   to the Render outbound range or a static outbound IP.
+3. Create the Render service from `render.yaml`.
+4. Fill `MONGODB_URI` and at least one LLM provider key in Render environment
+   variables.
+5. Use the Render Key Value internal connection string for `REDIS_URL` when the
+   API and Key Value service run in the same Render region.
+
+Minimal production variables:
+
+```env
+NODE_ENV=production
+MONGODB_URI=mongodb+srv://<user>:<password>@<cluster>/<database>?retryWrites=true&w=majority
+REDIS_URL=redis://<render-keyvalue-name>:6379
+JWT_SECRET=<generated-or-manual-secret>
+JWT_REFRESH_SECRET=<generated-or-manual-secret>
+DEEPSEEK_API_KEY=<provider-key>
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+```
 
 ---
 

@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import { redisConfig, dbConfig } from '../config';
 import { logger } from '../utils/logger';
 import { buildMongoUri } from '../utils/helpers';
-import Redis from 'ioredis';
+import Redis, { RedisOptions } from 'ioredis';
 
 let mongoConnection: typeof mongoose | null = null;
 let redisClient: Redis | null = null;
@@ -83,20 +83,30 @@ export async function connectRedis(): Promise<Redis> {
   }
 
   const config = redisConfig();
+  const redisUrl = process.env.REDIS_URL || process.env.KV_URL || process.env.RENDER_REDIS_URL;
+  const useTls =
+    process.env.REDIS_TLS === 'true' ||
+    process.env.REDIS_TLS === '1' ||
+    redisUrl?.startsWith('rediss://');
 
-  logger.info('Connecting to Redis...', { host: config.host, port: config.port });
+  logger.info('Connecting to Redis...', redisUrl ? { url: 'environment' } : { host: config.host, port: config.port });
 
-  redisClient = new Redis({
-    host: config.host,
-    port: config.port,
-    password: config.password || undefined,
-    db: config.db,
+  const options: RedisOptions = {
     keyPrefix: config.keyPrefix,
     retryStrategy: (times) => {
       const delay = Math.min(times * 50, 2000);
       return delay;
     },
     maxRetriesPerRequest: 3,
+    ...(useTls ? { tls: {} } : {}),
+  };
+
+  redisClient = redisUrl ? new Redis(redisUrl, options) : new Redis({
+    host: config.host,
+    port: config.port,
+    password: config.password || undefined,
+    db: config.db,
+    ...options,
   });
 
   redisClient.on('connect', () => {

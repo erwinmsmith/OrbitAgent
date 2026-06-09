@@ -42,13 +42,13 @@ const configSchema = z.object({
     version: z.string().default('1.0.0'),
     env: z.enum(['development', 'production', 'test']).default('development'),
     host: z.string().default('0.0.0.0'),
-    port: z.number().default(3000),
+    port: z.coerce.number().default(3000),
     apiPrefix: z.string().default('/api/v1'),
   }),
   database: z.object({
     mongodb: z.object({
       host: z.string().default('localhost'),
-      port: z.number().default(27017),
+      port: z.coerce.number().default(27017),
       database: z.string().default('orbit_agent'),
       username: z.string().optional(),
       password: z.string().optional(),
@@ -60,9 +60,9 @@ const configSchema = z.object({
   }),
   redis: z.object({
     host: z.string().default('localhost'),
-    port: z.number().default(6379),
+    port: z.coerce.number().default(6379),
     password: z.string().optional(),
-    db: z.number().default(0),
+    db: z.coerce.number().default(0),
     keyPrefix: z.string().default('orbit:'),
   }),
   llm: z.object({
