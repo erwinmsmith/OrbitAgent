@@ -9,6 +9,7 @@ import { getToolManager } from '../core/tools/ToolManager';
 import { getTokenService } from '../services/TokenService';
 import { getAgent } from '../core/agents/AgentLoader';
 import { getPromptManager } from '../core/prompts/PromptManager';
+import { UNINTELLIGIBLE_INPUT_GUARD } from '../core/prompts/runtimeGuards';
 import { getChart } from '../core/memory/ChartStore';
 import type { PermanentMessage } from '../core/memory/types';
 import DivinationTool from '../core/tools/builtins/DivinationTool';
@@ -373,6 +374,8 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
         '+ 分析，最后综合），比默认 3 阶段更慢但更全面。',
     });
   }
+
+  llmMessages.unshift({ role: 'system', content: UNINTELLIGIBLE_INPUT_GUARD });
 
   // Bind the divination tool to this request's (userId, sessionId), so
   // when the LLM calls `divination(action=analyze)` it implicitly reads
@@ -758,6 +761,7 @@ router.post('/stream', async (req: Request, res: Response) => {
     }
 
     for (const m of systemMessagesToInject) llmMessages.unshift(m);
+    llmMessages.unshift({ role: 'system', content: UNINTELLIGIBLE_INPUT_GUARD });
     llmMessages.push({ role: 'user', content: trimmedMessage });
 
     let fullContent = '';

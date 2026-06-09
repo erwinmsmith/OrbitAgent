@@ -188,9 +188,16 @@ export interface FuShenSkillInput {
 }
 export interface FuShenItem {
   relative: SixRelative;
+  fushenStem: HeavenlyStem;
   fushenBranch: EarthlyBranch;
+  fushenElement: WuXing;
+  feishenRelative: SixRelative;
+  feishenStem: HeavenlyStem;
   feishenBranch: EarthlyBranch;
+  feishenElement: WuXing;
   position: LinePosition;
+  relation: '飞生伏' | '飞克伏' | '伏生飞' | '伏克飞' | '飞伏比和';
+  classicalName: string;
 }
 export interface FuShenSkillOutput {
   hiddenGods: FuShenItem[];

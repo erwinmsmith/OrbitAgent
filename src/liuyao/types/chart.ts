@@ -9,6 +9,7 @@ import type {
   Palace, PalaceType, LinePosition, YaoValue, YinYang, YinYangBit,
   QuestionType, BranchRelationType,
 } from './basic';
+import type { FuShenItem } from './skill';
 
 /** A single line in a hexagram chart, with all its decorations. */
 export interface ChartLine {
@@ -49,6 +50,7 @@ export interface ChartLine {
     labels: string[];          // human-readable tags: 旺/相/休/囚/死/得月生/...
     score?: number;            // optional numeric strength
   };
+  hiddenGods?: FuShenItem[];    // 伏神 entries hidden under this line; the line itself is 飞神.
   tags?: string[];             // misc tags
 }
 
@@ -135,6 +137,7 @@ export interface ChartResult {
     monthRelations?: RelationTag[];
   };
   transformations?: TransformationResult[];
+  hiddenGods?: FuShenItem[];
   yongshen?: {
     candidates: YongshenCandidate[];
     supportingGods?: GodCandidate[];

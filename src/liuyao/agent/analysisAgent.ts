@@ -64,6 +64,7 @@ import {
 } from '../rag';
 import { getLLMManager } from '../../core/llm/LLMFactory';
 import { logger } from '../../utils/logger';
+import { withUnintelligibleInputGuard } from '../../core/prompts/runtimeGuards';
 
 const STEP_UNDERSTAND_SYSTEM = `你是六爻分析 Agent 的"理解阶段"。
 你的输入是已经排好的 ChartBrief（六爻结构化信息），以及用户的原始问题。
@@ -356,7 +357,7 @@ export async function runAnalysisAgent(
   const understandSysPrompt = thinking ? STEP_UNDERSTAND_THINKING_SYSTEM : STEP_UNDERSTAND_SYSTEM;
   const understandMaxTokens = thinking ? 4096 : 2048;
   const understandMessages = [
-    { role: 'system' as const, content: understandSysPrompt },
+    { role: 'system' as const, content: withUnintelligibleInputGuard(understandSysPrompt) },
     { role: 'user' as const, content:
       `【用户问题】\n${brief.question || '(用户没有明确问题，请基于卦象给出通用分析)'}\n\n` +
       `【ChartBrief】\n${brief.asMarkdown}\n\n` +
@@ -465,7 +466,7 @@ export async function runAnalysisAgent(
           d.chunk.text.slice(0, 600),
         ).join('\n\n');
     const synthMessages = [
-      { role: 'system' as const, content: STEP_SYNTHESIZE_SYSTEM },
+      { role: 'system' as const, content: withUnintelligibleInputGuard(STEP_SYNTHESIZE_SYSTEM) },
       { role: 'user' as const, content:
         `【用户问题】\n${brief.question || '(通用分析)'}\n\n` +
         `【ChartBrief】\n${brief.asMarkdown}\n\n` +
@@ -571,7 +572,7 @@ export async function runAnalysisAgent(
                 d.chunk.text.slice(0, 500),
               ).join('\n\n');
           const angleMessages = [
-            { role: 'system' as const, content: STEP_ANGLE_SYSTEM },
+            { role: 'system' as const, content: withUnintelligibleInputGuard(STEP_ANGLE_SYSTEM) },
             { role: 'user' as const, content:
               `【用户问题】\n${brief.question || '(通用分析)'}\n\n` +
               `【本角度】\n${angle.name}\n${angle.perspective}\n\n` +
@@ -639,7 +640,7 @@ export async function runAnalysisAgent(
           ).join('\n\n');
       const angleNames = perAngle.map((a) => a.name).join(' / ');
       const synthMessages = [
-        { role: 'system' as const, content: STEP_SYNTHESIZE_THINKING_SYSTEM },
+        { role: 'system' as const, content: withUnintelligibleInputGuard(STEP_SYNTHESIZE_THINKING_SYSTEM) },
         { role: 'user' as const, content:
           `【用户问题】\n${brief.question || '(通用分析)'}\n\n` +
           `【ChartBrief】\n${brief.asMarkdown}\n\n` +

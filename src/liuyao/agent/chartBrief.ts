@@ -34,6 +34,19 @@ export interface BriefLine {
   isYongshen: boolean;
   changedBranch?: string;
   changedElement?: string;
+  hiddenGods: Array<{
+    position: number;
+    relative: string;
+    fushenStem: string;
+    fushenBranch: string;
+    fushenElement: string;
+    feishenRelative: string;
+    feishenStem: string;
+    feishenBranch: string;
+    feishenElement: string;
+    relation: string;
+    classicalName: string;
+  }>;
   strengthTags: string[];
 }
 
@@ -86,6 +99,7 @@ export interface ChartBrief {
     toBranch: string;
     relation: string;
   }>;
+  hiddenGods: BriefLine['hiddenGods'];
   warnings: string[];
   /** Pre-rendered markdown-ish version of the brief — convenient for
    *  LLM prompts (chat models consume markdown better than JSON). */
@@ -120,6 +134,19 @@ function formatLine(l: ChartLine): BriefLine {
     isYongshen: !!l.isYongshen,
     changedBranch: l.changedBranch,
     changedElement: l.changedElement,
+    hiddenGods: (l.hiddenGods ?? []).map((h) => ({
+      position: h.position,
+      relative: h.relative,
+      fushenStem: h.fushenStem,
+      fushenBranch: h.fushenBranch,
+      fushenElement: h.fushenElement,
+      feishenRelative: h.feishenRelative,
+      feishenStem: h.feishenStem,
+      feishenBranch: h.feishenBranch,
+      feishenElement: h.feishenElement,
+      relation: h.relation,
+      classicalName: h.classicalName,
+    })),
     strengthTags: l.strength?.labels ?? [],
   };
 }
@@ -196,6 +223,19 @@ export function buildChartBrief(chart: ChartResult): ChartBrief {
       toBranch: t.toBranch,
       relation: t.relation,
     })),
+    hiddenGods: (chart.hiddenGods ?? []).map((h) => ({
+      position: h.position,
+      relative: h.relative,
+      fushenStem: h.fushenStem,
+      fushenBranch: h.fushenBranch,
+      fushenElement: h.fushenElement,
+      feishenRelative: h.feishenRelative,
+      feishenStem: h.feishenStem,
+      feishenBranch: h.feishenBranch,
+      feishenElement: h.feishenElement,
+      relation: h.relation,
+      classicalName: h.classicalName,
+    })),
     warnings: chart.warnings ?? [],
     // asMarkdown is filled in below — keep it as a forward reference
     // so the brief object is JSON-serializable without recursion.
@@ -242,8 +282,18 @@ function renderBriefMarkdown(b: ChartBrief): string {
     if (l.isYongshen) tags.push('用');
     const tagStr = tags.length ? ` 【${tags.join('/')}】` : '';
     const moveStr = l.moving ? ` 动→${l.changedBranch ?? '?'}(${l.changedElement ?? '?'})` : '';
+    const hiddenStr = l.hiddenGods.length
+      ? `；伏：${l.hiddenGods.map((h) => `${h.relative}${h.fushenStem}${h.fushenBranch}(${h.fushenElement})〔${h.classicalName}〕`).join('、')}`
+      : '';
     const strengthStr = l.strengthTags.length ? ` ${l.strengthTags.join('/')}` : '';
-    out.push(`- 第${l.position}爻 ${yx} ${l.stem}${l.branch}(${l.element}) ${l.sixRelative} 临${l.sixGod}${tagStr}${moveStr}${strengthStr}`);
+    out.push(`- 第${l.position}爻 ${yx} ${l.stem}${l.branch}(${l.element}) ${l.sixRelative} 临${l.sixGod}${tagStr}${moveStr}${hiddenStr}${strengthStr}`);
+  }
+
+  if (b.hiddenGods.length) {
+    out.push('\n## 飞神伏神');
+    for (const h of b.hiddenGods) {
+      out.push(`- 第${h.position}爻：伏神 ${h.relative}${h.fushenStem}${h.fushenBranch}(${h.fushenElement})，飞神 ${h.feishenRelative}${h.feishenStem}${h.feishenBranch}(${h.feishenElement})；${h.classicalName}（${h.relation}）`);
+    }
   }
 
   if (b.yongshen.candidates.length) {

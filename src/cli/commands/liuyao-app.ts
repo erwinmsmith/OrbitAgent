@@ -864,9 +864,17 @@ function buildFullChartLines(data: any): string[] {
   ];
   const lines = Array.isArray(chart.lines) ? chart.lines : [];
   for (const l of lines) {
-    rows.push(`${l.position}  ${l.stem || ''}${l.branch || ''} ${l.element || ''}  ${l.sixRelative || ''}  ${l.sixGod || ''}${l.isShi ? '  世' : ''}${l.isYing ? '  应' : ''}${l.void ? '  旬空' : ''}${l.moving ? `  动→${l.changedStem || ''}${l.changedBranch || ''} ${l.changedSixRelative || ''}` : ''}`);
+    rows.push(`${l.position}  ${l.stem || ''}${l.branch || ''} ${l.element || ''}  ${l.sixRelative || ''}  ${l.sixGod || ''}${l.isShi ? '  世' : ''}${l.isYing ? '  应' : ''}${l.void ? '  旬空' : ''}${l.moving ? `  动→${l.changedStem || ''}${l.changedBranch || ''} ${l.changedSixRelative || ''}` : ''}${formatHiddenGods(l) ? `  伏：${formatHiddenGods(l)}` : ''}`);
   }
   return rows;
+}
+
+function formatHiddenGods(line: any): string {
+  const items = Array.isArray(line?.hiddenGods) ? line.hiddenGods : [];
+  return items.map((item: any) => {
+    const entity = `${item.relative || item.sixRelative || ''}${item.fushenStem || item.stem || ''}${item.fushenBranch || item.branch || ''}${item.fushenElement || item.element || ''}`;
+    return item.classicalName ? `${entity}·${item.classicalName}` : entity;
+  }).filter(Boolean).join('、');
 }
 
 function buildHexagramPictureLines(chart: any): string[] {

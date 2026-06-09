@@ -228,12 +228,22 @@ function lineEntity(line: Record<string, unknown>, changed = false): string {
   return `${field('sixRelative')}${field('stem')}${field('branch')}${field('element')}`.replace(/\?/g, '')
 }
 
+function hiddenEntity(item: Record<string, unknown>): string {
+  const relative = textValue(item.relative, textValue(item.sixRelative, ''))
+  const stem = textValue(item.fushenStem, textValue(item.stem, ''))
+  const branch = textValue(item.fushenBranch, textValue(item.branch, ''))
+  const element = textValue(item.fushenElement, textValue(item.element, ''))
+  const classical = textValue(item.classicalName, '')
+  const entity = `${relative}${stem}${branch}${element}`.replace(/\?/g, '')
+  return classical ? `${entity} · ${classical}` : entity
+}
+
 function hiddenLineText(line: Record<string, unknown>): string {
   const direct = textValue(line.hiddenText, '')
   if (direct) return direct
   const hidden = asRecord(line.hiddenGod || line.fushen || line.hidden)
-  if (Object.keys(hidden).length) return lineEntity(hidden)
-  const hiddenList = arrayValue(line.hiddenGods || line.fushenList).map(asRecord).map((item) => lineEntity(item)).filter(Boolean)
+  if (Object.keys(hidden).length) return hiddenEntity(hidden)
+  const hiddenList = arrayValue(line.hiddenGods || line.fushenList).map(asRecord).map((item) => hiddenEntity(item)).filter(Boolean)
   return hiddenList.join('、')
 }
 
@@ -376,6 +386,7 @@ function HexagramDetail({ reading }: { reading: Record<string, unknown> | null }
               {line.isShi ? ' · 世' : ''}
               {line.isYing ? ' · 应' : ''}
               {line.moving ? ' · 动' : ''}
+              {hiddenLineText(line) ? ` · 伏：${hiddenLineText(line)}` : ''}
             </small>
           </div>
         ))}

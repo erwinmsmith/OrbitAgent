@@ -794,15 +794,24 @@ export function renderLineDetails(data: any): void {
     ].filter(Boolean).join('/');
     const marker = shiYing ? ` ${shiYing}` : '';
     const original = `${formatStemBranchElement(l.stem, l.branch, l.element)} ${l.sixRelative} 临${l.sixGod}${voidMark}${movingMark}${marker}`;
+    const hidden = formatHiddenGods(l);
     if (hasMoving) {
       const changed = l.changedSixRelative
         ? `${formatStemBranchElement(l.changedStem, l.changedBranch, l.changedElement)} ${l.changedSixRelative}`
         : chalk.gray('—');
-      console.log(chalk.gray(`    ${l.position}: ${original}`) + chalk.reset(`  |  变: ${changed}`));
+      console.log(chalk.gray(`    ${l.position}: ${original}`) + chalk.reset(`  |  变: ${changed}${hidden ? `  |  伏: ${hidden}` : ''}`));
     } else {
-      console.log(chalk.gray(`    ${l.position}: ${original}`));
+      console.log(chalk.gray(`    ${l.position}: ${original}${hidden ? `  |  伏: ${hidden}` : ''}`));
     }
   }
+}
+
+function formatHiddenGods(line: any): string {
+  const items = Array.isArray(line?.hiddenGods) ? line.hiddenGods : [];
+  return items.map((item: any) => {
+    const entity = `${item.relative || item.sixRelative || ''}${item.fushenStem || item.stem || ''}${item.fushenBranch || item.branch || ''}${item.fushenElement || item.element || ''}`;
+    return item.classicalName ? `${entity}·${item.classicalName}` : entity;
+  }).filter(Boolean).join('、');
 }
 
 function formatStemBranchElement(stem: unknown, branch: unknown, element: unknown): string {

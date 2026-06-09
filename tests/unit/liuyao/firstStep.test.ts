@@ -32,6 +32,7 @@ import { voidSkill } from '../../../src/liuyao/skills/voidSkill';
 import { assembleChart } from '../../../src/liuyao/skills/chartAssembler';
 import { castSkill } from '../../../src/liuyao/skills/castSkill';
 import { yaoToBit, isMoving } from '../../../src/liuyao/constants/yao';
+import { buildChartBrief } from '../../../src/liuyao/agent/chartBrief';
 
 describe('64-hexagram table (from 64卦数据.json)', () => {
   it('has all 64 hexagrams in 文王 order', () => {
@@ -260,6 +261,45 @@ describe('assembleChart — full first-step wiring', () => {
     expect(r.movingLines).toEqual([1]);
     expect(r.originalHexagram.name).toBe('乾');
     expect(r.changedHexagram.name).toBe('姤');
+  });
+
+  it('adds 飞神/伏神 to the chart when a 六亲 is missing', () => {
+    // 天风姤 = 011111, 乾宫一世，缺妻财。定例为：
+    // 妻财寅木伏于二爻子孙亥水之下，飞来生伏得长生。
+    const r = assembleChart({
+      bits: [0, 1, 1, 1, 1, 1],
+      dayStem: '甲',
+      dayBranch: '子',
+    });
+    expect(r.originalHexagram.name).toBe('姤');
+    expect(r.hiddenGods).toHaveLength(1);
+    expect(r.hiddenGods?.[0]).toMatchObject({
+      relative: '妻财',
+      fushenStem: '甲',
+      fushenBranch: '寅',
+      fushenElement: '木',
+      feishenRelative: '子孙',
+      feishenStem: '辛',
+      feishenBranch: '亥',
+      feishenElement: '水',
+      position: 2,
+      relation: '飞生伏',
+      classicalName: '飞来生伏得长生',
+    });
+    expect(r.lines[1]!.hiddenGods?.[0]).toBe(r.hiddenGods?.[0]);
+  });
+
+  it('includes 飞神/伏神 in ChartBrief markdown', () => {
+    const r = assembleChart({
+      bits: [0, 1, 1, 1, 1, 1],
+      dayStem: '甲',
+      dayBranch: '子',
+    });
+    const brief = buildChartBrief(r);
+    expect(brief.hiddenGods).toHaveLength(1);
+    expect(brief.asMarkdown).toContain('## 飞神伏神');
+    expect(brief.asMarkdown).toContain('伏神 妻财甲寅(木)');
+    expect(brief.asMarkdown).toContain('飞神 子孙辛亥(水)');
   });
 
   it('produces a non-empty chart even with no dayStem (auto-derives from "now")', () => {

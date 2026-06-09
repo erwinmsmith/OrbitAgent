@@ -35,7 +35,7 @@
  *                                 (system + own user-scope)
  *   DELETE /rag/:source         — delete a doc the caller owns
  *                                 (or any if admin)
- *   GET  /rag/stats            — RAG index size + scope breakdown
+ *   GET  /rag/list             — RAG index size + scope breakdown
  *   POST /rag/search           — top-k chunks for a query (scoped)
  *
  * The chart assembler records a `warnings[]` array on the response
@@ -65,6 +65,7 @@ import { MessageModel } from '../models/Conversation';
 import { getAgent } from '../core/agents/AgentLoader';
 import { getLLMManager } from '../core/llm/LLMFactory';
 import type { LLMMessage } from '../core/llm/types';
+import { withUnintelligibleInputGuard } from '../core/prompts/runtimeGuards';
 import { HTTP_STATUS } from '../constants';
 import { logger } from '../utils/logger';
 import { generateSessionId } from '../utils/helpers';
@@ -212,7 +213,7 @@ function buildSummaryMessages(body: any): LLMMessage[] {
     showCitations: false,
   }).slice(0, 12000);
   return [
-    { role: 'system', content: DEFAULT_INTERACTIVE_SUMMARY_PROMPT },
+    { role: 'system', content: withUnintelligibleInputGuard(DEFAULT_INTERACTIVE_SUMMARY_PROMPT) },
     {
       role: 'user',
       content: [

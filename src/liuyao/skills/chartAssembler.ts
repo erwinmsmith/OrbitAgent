@@ -18,17 +18,19 @@ import { transformationSkill } from './transformationSkill';
 import { yongshenSkill } from './yongshenSkill';
 import { strengthSkill } from './strengthSkill';
 import { calendarSkill } from './calendarSkill';
+import { fushenSkill } from './fushenSkill';
 import type {
   CastSkillOutput, HexagramSkillOutputT, PalaceSkillOutput, NaJiaSkillOutput,
   SixRelativeSkillOutput, SixGodSkillOutput, VoidSkillOutput,
   BranchRelationSkillOutput, TransformationSkillOutput, YongshenSkillOutput,
-  StrengthSkillOutput, CalendarSkillOutput,
+  StrengthSkillOutput, CalendarSkillOutput, FuShenSkillOutput,
 } from '../types/skill';
 import type { ChartResult, ChartLine, HexagramMeta } from '../types/chart';
 import type { QuestionType, EarthlyBranch, HeavenlyStem, LinePosition, WuXing, SixRelative, SixGod, YinYangBit } from '../types/basic';
 import { flipYao, isMoving, yaoYinYang, LINE_POSITIONS } from '../constants/yao';
 import { TRIGRAM_BITS, BITS_TO_TRIGRAM } from '../constants/trigrams';
 import type { LinePosition as LP } from '../types/basic';
+import { HEXAGRAMS } from '../constants/hexagrams';
 
 export interface AssembleInput {
   question?: string;
@@ -235,6 +237,32 @@ export function assembleChart(input: AssembleInput): ChartResult {
     return out;
   })();
 
+  // Step 9.75 — 伏神 / 飞神. This belongs to the deterministic
+  // charting layer: if a 六亲 is missing from the visible original
+  // hexagram, the source line is taken from the 本宫首卦 and hidden
+  // under the original line at the same position.
+  let hiddenGods: ChartResult['hiddenGods'] = [];
+  if (hex.originalHexagram && palace) {
+    const palacePureHexagram = Object.values(HEXAGRAMS).find((h) =>
+      h.palace === hex.originalHexagram!.palace && h.palaceType === '本宫',
+    );
+    if (palacePureHexagram) {
+      const fushen: FuShenSkillOutput | null = safe(() => fushenSkill({
+        originalHexagram: hex.originalHexagram!,
+        palacePureHexagram,
+        visibleRelatives: relatives,
+      }), 'fushenSkill', warnings);
+      hiddenGods = fushen?.hiddenGods ?? [];
+      for (const item of hiddenGods) {
+        const line = lines[item.position - 1];
+        if (!line) continue;
+        line.hiddenGods = [...(line.hiddenGods ?? []), item];
+      }
+    } else {
+      warnings.push(`fushenSkill: no pure palace hexagram found for ${hex.originalHexagram.palace}宫`);
+    }
+  }
+
   // Step 10 — Branch relations
   let relations: ChartResult['relations'];
   const brOut: BranchRelationSkillOutput | null = safe(() => branchRelationSkill({
@@ -317,6 +345,7 @@ export function assembleChart(input: AssembleInput): ChartResult {
     lines: lines as [ChartLine, ChartLine, ChartLine, ChartLine, ChartLine, ChartLine],
     relations,
     transformations,
+    hiddenGods,
     summaryTags: [],
   };
 
