@@ -27,8 +27,9 @@ Modular conversation AI agent backend service with multi-user LLM support.
 - Redis
 
 Local development can use local MongoDB/Redis services. Production can use
-managed services by setting connection-string environment variables; the
-application automatically prefers those over host/port settings.
+managed services by filling connection-string environment variables. If those
+cloud variables are empty or unset, the application automatically falls back to
+the local host/port settings.
 
 ### 1. Install Dependencies
 
@@ -47,6 +48,10 @@ cp .env.example .env
 Edit `.env` with your API keys:
 
 ```bash
+# Leave these empty for local MongoDB/Redis.
+MONGODB_URI=
+REDIS_URL=
+
 # LLM API Keys (fill in at least one)
 ANTHROPIC_API_KEY=sk-ant-xxxxx
 OPENAI_API_KEY=sk-xxxxx
@@ -85,17 +90,36 @@ Server runs at: `http://localhost:3000`
 ## Cloud Database and Deployment
 
 The framework supports local services and managed cloud services with the same
-runtime code:
+runtime code. Connection-string variables are optional overrides:
 
 - MongoDB: set `MONGODB_URI` to a full MongoDB connection string, such as a
-  MongoDB Atlas URI. If unset, the app builds a local URI from
+  MongoDB Atlas URI. If `MONGODB_URI` is empty or unset, the app builds a local
+  URI from
   `MONGODB_HOST`, `MONGODB_PORT`, `MONGODB_DATABASE`, `MONGODB_USERNAME`, and
   `MONGODB_PASSWORD`.
 - Redis: set `REDIS_URL`, `KV_URL`, or `RENDER_REDIS_URL` to a managed Redis or
-  Render Key Value connection string. If unset, the app connects with
-  `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, and `REDIS_DB`.
+  Render Key Value connection string. If all three are empty or unset, the app
+  connects with `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, and `REDIS_DB`.
 - TLS: `rediss://` URLs enable TLS automatically. You can also set
   `REDIS_TLS=true` for providers that require TLS with a `redis://` URL.
+
+This means the same `.env` file can support both modes:
+
+```env
+# Local mode
+MONGODB_URI=
+REDIS_URL=
+MONGODB_HOST=localhost
+MONGODB_PORT=27017
+MONGODB_DATABASE=orbit_agent
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_DB=0
+
+# Cloud mode
+MONGODB_URI=mongodb+srv://<user>:<password>@<cluster>/<database>?retryWrites=true&w=majority
+REDIS_URL=redis://<render-keyvalue-name>:6379
+```
 
 The repository includes a generic `render.yaml` blueprint with:
 

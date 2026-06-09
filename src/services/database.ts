@@ -7,6 +7,11 @@ import Redis, { RedisOptions } from 'ioredis';
 let mongoConnection: typeof mongoose | null = null;
 let redisClient: Redis | null = null;
 
+function nonEmptyEnv(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value || undefined;
+}
+
 // MongoDB connection
 export async function connectMongoDB(): Promise<typeof mongoose> {
   if (mongoConnection) {
@@ -14,7 +19,7 @@ export async function connectMongoDB(): Promise<typeof mongoose> {
   }
 
   // Check for full URI in environment variable first
-  const envUri = process.env.MONGODB_URI;
+  const envUri = nonEmptyEnv('MONGODB_URI');
   const config = dbConfig();
 
   let uri: string;
@@ -83,10 +88,11 @@ export async function connectRedis(): Promise<Redis> {
   }
 
   const config = redisConfig();
-  const redisUrl = process.env.REDIS_URL || process.env.KV_URL || process.env.RENDER_REDIS_URL;
+  const redisUrl = nonEmptyEnv('REDIS_URL') || nonEmptyEnv('KV_URL') || nonEmptyEnv('RENDER_REDIS_URL');
+  const redisTls = nonEmptyEnv('REDIS_TLS')?.toLowerCase();
   const useTls =
-    process.env.REDIS_TLS === 'true' ||
-    process.env.REDIS_TLS === '1' ||
+    redisTls === 'true' ||
+    redisTls === '1' ||
     redisUrl?.startsWith('rediss://');
 
   logger.info('Connecting to Redis...', redisUrl ? { url: 'environment' } : { host: config.host, port: config.port });

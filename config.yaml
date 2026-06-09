@@ -9,7 +9,7 @@ app:
 database:
   mongodb:
     host: "${MONGODB_HOST:localhost}"
-    port: 27017
+    port: "${MONGODB_PORT:27017}"
     database: "${MONGODB_DATABASE:orbit_agent}"
     username: "${MONGODB_USERNAME:}"
     password: "${MONGODB_PASSWORD:}"
@@ -19,10 +19,10 @@ database:
 
 redis:
   host: "${REDIS_HOST:localhost}"
-  port: 6379
+  port: "${REDIS_PORT:6379}"
   password: "${REDIS_PASSWORD:}"
-  db: 0
-  keyPrefix: "orbit:"
+  db: "${REDIS_DB:0}"
+  keyPrefix: "${REDIS_KEY_PREFIX:orbit:}"
 
 llm:
   defaultProvider: "deepseek"
