@@ -1,6 +1,19 @@
 name: orbit-agent
 
 services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - orbit
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
@@ -26,9 +39,14 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 3000
+      MONGODB_HOST: mongo
+      MONGODB_PORT: 27017
+      MONGODB_DATABASE: orbit_agent
       REDIS_HOST: redis
       REDIS_PORT: 6379
     depends_on:
+      mongo:
+        condition: service_healthy
       redis:
         condition: service_healthy
     ports:
@@ -53,6 +71,7 @@ services:
       - orbit
 
 volumes:
+  mongo-data:
   redis-data:
 
 networks:

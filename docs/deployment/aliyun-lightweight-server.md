@@ -14,14 +14,15 @@ browser
 Docker Compose
   -> orbit-agent-api                  Node 后端
   -> orbit-agent-web                  前端静态资源 Nginx
+  -> orbit-agent-mongo                内部 MongoDB fallback
   -> orbit-agent-redis                内部 Redis
 
 后端
-  -> MongoDB Atlas                    继续使用现有云数据库
+  -> MongoDB Atlas                    填写 MONGODB_URI 时使用现有云数据库
   -> DeepSeek/Zhipu 等模型 API
 ```
 
-这样前后端都在香港服务器上；数据库暂时不搬，避免迁移用户和历史会话数据。Compose 默认只把前后端暴露到宿主机 `127.0.0.1`，不会直接公开容器端口。
+这样前后端都在香港服务器上；如果 `MONGODB_URI` 为空，后端使用 compose 内部 MongoDB；如果填写 Atlas 连接串，则继续使用现有云数据库，避免迁移用户和历史会话数据。Compose 默认只把前后端暴露到宿主机 `127.0.0.1`，不会直接公开数据库端口。
 
 ## 第一步：确认服务器现状
 
@@ -73,7 +74,9 @@ Docker 部署使用仓库根目录：
 NODE_ENV=production
 HOST=0.0.0.0
 PORT=3000
-MONGODB_URI=mongodb+srv://<user>:<password>@<cluster>/<db>?retryWrites=true&w=majority
+MONGODB_URI=
+MONGODB_HOST=mongo
+MONGODB_DATABASE=orbit_agent
 REDIS_HOST=redis
 REDIS_PORT=6379
 DEEPSEEK_API_KEY=<your_deepseek_key>
@@ -84,7 +87,7 @@ ORBIT_EMBEDDER=remote-zhipu
 ZHIPU_API_KEY=<your_zhipu_key>
 ```
 
-如果 MongoDB Atlas 没有放开服务器出口 IP，需要在 Atlas Network Access 中加入轻量服务器公网 IP。
+如果要使用 MongoDB Atlas，填写 `MONGODB_URI` 并在 Atlas Network Access 中加入轻量服务器公网 IP。如果 `MONGODB_URI` 留空，则使用本机 Docker 内部 MongoDB，不依赖 Atlas。
 
 ## 第三步：部署
 

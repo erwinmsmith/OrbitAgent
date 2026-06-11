@@ -239,7 +239,7 @@ npm run deploy:web:aliyun-hk
 
 ```bash
 cp .env.production.example .env.production
-# 填写 MONGODB_URI、DEEPSEEK_API_KEY、JWT_SECRET 等真实值
+# 填写 DEEPSEEK_API_KEY、JWT_SECRET 等真实值；MONGODB_URI 为空时使用本地 Mongo 容器
 docker compose -f docker-compose.aliyun.yml up -d --build
 ```
 
@@ -247,6 +247,7 @@ docker compose -f docker-compose.aliyun.yml up -d --build
 
 - 前端容器：宿主机 `127.0.0.1:3101`
 - 后端容器：宿主机 `127.0.0.1:3100`
+- MongoDB：仅 compose 内部网络可访问；填入 `MONGODB_URI` 后后端改用 Atlas
 - Redis：仅 compose 内部网络可访问
 
 本地开发仍可只使用本地 MongoDB/Redis 和 `.env`：
