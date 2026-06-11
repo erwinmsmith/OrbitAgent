@@ -15,7 +15,7 @@ From the repository root:
 npm run web:dev
 ```
 
-The frontend defaults to same-origin API calls:
+In local development, the frontend defaults to same-origin API calls:
 
 ```text
 /api/v1
@@ -28,6 +28,15 @@ domains:
 ```bash
 VITE_ORBIT_API_BASE=http://localhost:3000/api/v1 npm run dev
 ```
+
+In production builds, the frontend defaults to the Render API directly:
+
+```text
+https://orbit-agent-api.onrender.com/api/v1
+```
+
+This keeps long-running deep-analysis requests off the Vercel rewrite/proxy
+path. Set `VITE_ORBIT_API_BASE` only when deploying against another API origin.
 
 ## Build
 

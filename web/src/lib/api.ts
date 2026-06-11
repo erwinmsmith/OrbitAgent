@@ -1,5 +1,9 @@
+const DEFAULT_API_BASE = import.meta.env.PROD
+  ? 'https://orbit-agent-api.onrender.com/api/v1'
+  : '/api/v1'
+
 export const API_BASE =
-  import.meta.env.VITE_ORBIT_API_BASE ?? '/api/v1'
+  import.meta.env.VITE_ORBIT_API_BASE ?? DEFAULT_API_BASE
 
 export interface ApiEnvelope<T> {
   success: boolean

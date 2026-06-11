@@ -214,11 +214,17 @@ JWT_REFRESH_SECRET=<generated_by_render_or_manual_secret>
 REDIS_URL=<injected_from_orbit-agent-kv>
 ```
 
-Vercel 需要填写的环境变量：
+Vercel 的前端生产构建默认会直连 Render API：
 
 ```env
 VITE_ORBIT_API_BASE=https://<your-render-service>.onrender.com/api/v1
 ```
+
+当前项目默认值是 `https://orbit-agent-api.onrender.com/api/v1`。只有部署到其他
+Render 服务名或其他后端域名时，才需要在 Vercel 里显式填写
+`VITE_ORBIT_API_BASE`。不要把生产环境的 `VITE_ORBIT_API_BASE` 设成
+`/api/v1`，否则深度推演这类长请求会先经过 Vercel rewrite，可能被代理层截断并
+返回 HTML 502。
 
 本地开发仍可只使用本地 MongoDB/Redis 和 `.env`：
 
