@@ -49,6 +49,8 @@ const DEFAULT_DIVINATION_PROMPT = '请结合卦象分析、解答问题。'
 type DetailPanel = 'chart' | null
 type AnalysisMode = 'quick' | 'deep'
 type CastingStage = 'idle' | 'casting' | 'analysis' | 'reading' | 'done' | 'error'
+type CoinYangCount = 0 | 1 | 2 | 3
+type ManualCoinCounts = Array<CoinYangCount | null>
 
 interface CastingProgress {
   stage: CastingStage
@@ -72,11 +74,24 @@ const CASTING_PROGRESS: Record<Exclude<CastingStage, 'idle'>, CastingProgress> =
 
 const METHODS: Array<{ id: DivinationMethod; label: string; hint: string }> = [
   { id: 'coins', label: '自动摇卦', hint: '模拟三枚硬币摇六次' },
-  { id: 'manual', label: '手动六爻', hint: '输入 6 个 6/7/8/9' },
+  { id: 'manual', label: '手动六爻', hint: '逐爻选择三枚硬币阳面数' },
   { id: 'time', label: '时间起卦', hint: '按当前时间取卦' },
-  { id: 'numbers', label: '数字起卦', hint: '输入 3 个数字' },
+  { id: 'numbers', label: '数字起卦', hint: '分别填写上卦、下卦、动爻数' },
   { id: 'character', label: '汉字起卦', hint: '输入 1 个汉字' },
 ]
+
+const EMPTY_MANUAL_COIN_COUNTS: ManualCoinCounts = Array.from({ length: 6 }, () => null)
+const EMPTY_NUMBER_INPUTS = ['', '', '']
+const COIN_YANG_OPTIONS: Array<{ count: CoinYangCount; yao: 6 | 7 | 8 | 9; label: string }> = [
+  { count: 0, yao: 6, label: '0 阳' },
+  { count: 1, yao: 7, label: '1 阳' },
+  { count: 2, yao: 8, label: '2 阳' },
+  { count: 3, yao: 9, label: '3 阳' },
+]
+
+function coinYangCountToYaoValue(count: CoinYangCount): 6 | 7 | 8 | 9 {
+  return (count + 6) as 6 | 7 | 8 | 9
+}
 
 function makeSessionId() {
   return `web_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
@@ -181,18 +196,6 @@ function parseNumbersInput(value: string): number[] | null {
     .filter(Boolean)
     .map(Number)
   return numbers.length === 3 && numbers.every(Number.isFinite) ? numbers : null
-}
-
-function parseManualInput(value: string): { bits?: number[]; yaoValues?: number[] } | null {
-  const values = value
-    .trim()
-    .split(/[\s,，]+/)
-    .filter(Boolean)
-    .map(Number)
-  if (values.length !== 6 || !values.every(Number.isFinite)) return null
-  if (values.every((item) => item === 0 || item === 1)) return { bits: values }
-  if (values.every((item) => [6, 7, 8, 9].includes(item))) return { yaoValues: values }
-  return null
 }
 
 function cleanReportForDisplay(value: unknown): string {
@@ -661,6 +664,8 @@ function DivinationWorkbench({
   method,
   question,
   methodInput,
+  manualCoinCounts,
+  numberInputs,
   analysisMode,
   angles,
   running,
@@ -670,6 +675,8 @@ function DivinationWorkbench({
   onMethodChange,
   onQuestionChange,
   onMethodInputChange,
+  onManualCoinCountChange,
+  onNumberInputChange,
   onAnalysisModeChange,
   onAnglesChange,
   onSubmit,
@@ -678,6 +685,8 @@ function DivinationWorkbench({
   method: DivinationMethod
   question: string
   methodInput: string
+  manualCoinCounts: ManualCoinCounts
+  numberInputs: string[]
   analysisMode: AnalysisMode
   angles: number
   running: boolean
@@ -687,6 +696,8 @@ function DivinationWorkbench({
   onMethodChange: (method: DivinationMethod) => void
   onQuestionChange: (question: string) => void
   onMethodInputChange: (value: string) => void
+  onManualCoinCountChange: (index: number, value: CoinYangCount) => void
+  onNumberInputChange: (index: number, value: string) => void
   onAnalysisModeChange: (mode: AnalysisMode) => void
   onAnglesChange: (angles: number) => void
   onSubmit: () => void
@@ -694,12 +705,12 @@ function DivinationWorkbench({
 }) {
   const methodHelp = {
     coins: '直接输入问题即可，系统会自动摇卦。',
-    manual: '输入 6 个爻值，顺序为初爻到上爻，例如 7 8 7 9 7 8。',
+    manual: '从初爻到上爻依次选择每次三枚硬币的阳面个数。五角硬币以花面为阳面。',
     time: '直接输入问题即可，系统按当前时间起卦。',
-    numbers: '输入 3 个数字：上卦、下卦、动爻，例如 2 9 5。',
+    numbers: '分别输入 3 个数字：第一个取上卦，第二个取下卦，第三个取动爻。',
     character: '输入 1 个汉字，例如 财。',
   }[method]
-  const inputLabel = method === 'manual' ? '六爻值' : method === 'numbers' ? '三数' : method === 'character' ? '汉字' : ''
+  const inputLabel = method === 'character' ? '汉字' : ''
 
   return (
     <section className="workbench" aria-label="六爻交互工作台">
@@ -741,6 +752,51 @@ function DivinationWorkbench({
             rows={3}
           />
         </label>
+        {method === 'manual' ? (
+          <div className="manual-cast-panel" aria-label="手动六爻阳面选择">
+            <div className="field-heading">
+              <span>阳面个数</span>
+              <small>顺序为初爻到上爻；五角硬币以花面为阳面。</small>
+            </div>
+            <div className="manual-coin-grid">
+              {manualCoinCounts.map((selected, index) => (
+                <div className="manual-coin-row" key={`manual-coin-${index}`}>
+                  <span>第{index + 1}爻</span>
+                  <div role="group" aria-label={`第${index + 1}爻阳面个数`}>
+                    {COIN_YANG_OPTIONS.map((option) => (
+                      <button
+                        type="button"
+                        key={option.count}
+                        data-active={selected === option.count ? 'true' : undefined}
+                        onClick={() => onManualCoinCountChange(index, option.count)}
+                      >
+                        <strong>{option.label}</strong>
+                        <small>爻值 {option.yao}</small>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {method === 'numbers' ? (
+          <div className="number-cast-panel" aria-label="数字起卦输入">
+            {['上卦数', '下卦数', '动爻数'].map((label, index) => (
+              <label key={label}>
+                <span>{label}</span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  step="1"
+                  min="1"
+                  value={numberInputs[index] ?? ''}
+                  onChange={(event) => onNumberInputChange(index, event.target.value)}
+                />
+              </label>
+            ))}
+          </div>
+        ) : null}
         {inputLabel ? (
           <label>
             <span>{inputLabel}</span>
@@ -824,6 +880,8 @@ function AuthedApp({
   const [method, setMethod] = useState<DivinationMethod>('coins')
   const [question, setQuestion] = useState('')
   const [methodInput, setMethodInput] = useState('')
+  const [manualCoinCounts, setManualCoinCounts] = useState<ManualCoinCounts>(() => [...EMPTY_MANUAL_COIN_COUNTS])
+  const [numberInputs, setNumberInputs] = useState<string[]>(() => [...EMPTY_NUMBER_INPUTS])
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>('quick')
   const [angles, setAngles] = useState(3)
   const [workflowError, setWorkflowError] = useState('')
@@ -972,6 +1030,8 @@ function AuthedApp({
     setSessionMessages(nextSessionId, [])
     setQuestion('')
     setMethodInput('')
+    setManualCoinCounts([...EMPTY_MANUAL_COIN_COUNTS])
+    setNumberInputs([...EMPTY_NUMBER_INPUTS])
     setWorkflowError('')
     setActivePanel(null)
     setReadingsBySession((current) => ({ ...current, [nextSessionId]: null }))
@@ -988,9 +1048,14 @@ function AuthedApp({
 
   const buildCastingBody = (): Pick<DivinationAskBody, 'bits' | 'yaoValues' | 'casting'> | null => {
     if (method === 'coins' || method === 'time') return { casting: { method } }
-    if (method === 'manual') return parseManualInput(methodInput)
+    if (method === 'manual') {
+      if (manualCoinCounts.some((item) => item === null)) return null
+      return {
+        yaoValues: manualCoinCounts.map((item) => coinYangCountToYaoValue(item as CoinYangCount)),
+      }
+    }
     if (method === 'numbers') {
-      const numbers = parseNumbersInput(methodInput)
+      const numbers = parseNumbersInput(numberInputs.join(' '))
       return numbers ? { casting: { method, numbers } } : null
     }
     const character = Array.from(methodInput.trim())[0]
@@ -1007,9 +1072,9 @@ function AuthedApp({
     if (!castingBody) {
       setWorkflowError(
         method === 'manual'
-          ? '请输入 6 个爻值，例如：7 8 7 9 7 8。'
+          ? '请从初爻到上爻选择 6 次阳面个数。'
           : method === 'numbers'
-            ? '请输入 3 个数字，例如：2 9 5。'
+            ? '请完整填写上卦数、下卦数、动爻数。'
             : '请输入 1 个汉字。',
       )
       return
@@ -1146,6 +1211,8 @@ function AuthedApp({
                 method={method}
                 question={question}
                 methodInput={methodInput}
+                manualCoinCounts={manualCoinCounts}
+                numberInputs={numberInputs}
                 analysisMode={analysisMode}
                 angles={angles}
                 running={activeWorkflowRunning}
@@ -1155,10 +1222,18 @@ function AuthedApp({
                 onMethodChange={(nextMethod) => {
                   setMethod(nextMethod)
                   setMethodInput('')
+                  if (nextMethod === 'manual') setManualCoinCounts([...EMPTY_MANUAL_COIN_COUNTS])
+                  if (nextMethod === 'numbers') setNumberInputs([...EMPTY_NUMBER_INPUTS])
                   setWorkflowError('')
                 }}
                 onQuestionChange={setQuestion}
                 onMethodInputChange={setMethodInput}
+                onManualCoinCountChange={(index, value) => {
+                  setManualCoinCounts((current) => current.map((item, i) => (i === index ? value : item)))
+                }}
+                onNumberInputChange={(index, value) => {
+                  setNumberInputs((current) => current.map((item, i) => (i === index ? value : item)))
+                }}
                 onAnalysisModeChange={setAnalysisMode}
                 onAnglesChange={setAngles}
                 onSubmit={runDivination}

@@ -558,6 +558,85 @@ h1 {
   resize: vertical;
 }
 
+.field-heading {
+  display: grid;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.field-heading span {
+  color: var(--muted);
+}
+
+.field-heading small {
+  color: rgba(93, 84, 72, 0.82);
+  line-height: 1.45;
+}
+
+.manual-cast-panel,
+.number-cast-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.manual-coin-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.manual-coin-row {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.manual-coin-row > span {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.manual-coin-row > div {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.manual-coin-row button {
+  min-width: 0;
+  min-height: 44px;
+  display: grid;
+  place-items: center;
+  gap: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(23, 21, 18, 0.025);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.manual-coin-row button:hover,
+.manual-coin-row button[data-active='true'] {
+  border-color: rgba(22, 116, 95, 0.42);
+  background: rgba(22, 116, 95, 0.11);
+}
+
+.manual-coin-row button strong {
+  font-size: 13px;
+}
+
+.manual-coin-row button small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.number-cast-panel {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .question-grid textarea:focus,
 .question-grid input:focus {
   border-color: var(--jade);
@@ -1326,6 +1405,27 @@ h1 {
     min-height: 68px;
   }
 
+  .manual-coin-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .manual-coin-row > div {
+    gap: 5px;
+  }
+
+  .manual-coin-row button {
+    min-height: 42px;
+  }
+
+  .manual-coin-row button strong {
+    font-size: 12px;
+  }
+
+  .number-cast-panel {
+    grid-template-columns: 1fr;
+  }
+
   .action-row {
     align-items: stretch;
   }
@@ -1356,7 +1456,7 @@ h1 {
 
   .command-row {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
   }
 
   .command-row button {
