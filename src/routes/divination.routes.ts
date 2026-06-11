@@ -438,7 +438,7 @@ router.post('/ask', asyncHandler(async (req: Request, res: Response) => {
         chart,
         report: analysis.report,
         content,
-        hiddenFromChat: true,
+        displayContent: content,
       },
     }),
   ]);

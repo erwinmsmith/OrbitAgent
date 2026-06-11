@@ -94,7 +94,8 @@ function toVisibleConversationMessages(messages: PermanentMessage[]): PermanentM
 
     if (message.role === 'assistant') {
       const summary = metaText(metadata, 'summary');
-      return summary ? [{ ...message, content: summary }] : [];
+      const content = metaText(metadata, 'content');
+      return summary || content ? [{ ...message, content: summary || content }] : [];
     }
 
     return [];

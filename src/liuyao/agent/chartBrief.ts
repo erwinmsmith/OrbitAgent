@@ -306,7 +306,7 @@ function renderBriefMarkdown(b: ChartBrief): string {
       l.twelveStage?.byChangedBranch ? `动化${l.twelveStage.byChangedBranch}` : '',
     ].filter(Boolean);
     const stageStr = stageParts.length ? ` 十二长生：${stageParts.join(' / ')}` : '';
-    const strengthStr = l.strengthTags.length ? ` ${l.strengthTags.join('/')}` : '';
+    const strengthStr = l.strengthTags.length ? ` 旺衰：${l.strengthTags.join('/')}` : '';
     out.push(`- 第${l.position}爻 ${yx} ${l.stem}${l.branch}(${l.element}) ${l.sixRelative} 临${l.sixGod}${tagStr}${moveStr}${hiddenStr}${stageStr}${strengthStr}`);
     if (l.twelveStage?.notes.length) {
       out.push(`  - 十二长生提示：${l.twelveStage.notes.join('；')}`);

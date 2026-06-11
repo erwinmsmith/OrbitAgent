@@ -35,7 +35,6 @@ import {
   loadDivinationReading,
   loadConversationMessages,
   refreshAccessToken,
-  streamDivinationSummary,
   type AuthUser,
   type ConversationSummary,
   type DivinationAskBody,
@@ -50,7 +49,7 @@ const DEFAULT_DIVINATION_PROMPT = '请结合卦象分析、解答问题。'
 
 type DetailPanel = 'chart' | 'why' | null
 type AnalysisMode = 'quick' | 'deep'
-type CastingStage = 'idle' | 'casting' | 'analysis' | 'summary' | 'done' | 'error'
+type CastingStage = 'idle' | 'casting' | 'analysis' | 'reading' | 'done' | 'error'
 
 interface CastingProgress {
   stage: CastingStage
@@ -67,7 +66,7 @@ const IDLE_PROGRESS: CastingProgress = {
 const CASTING_PROGRESS: Record<Exclude<CastingStage, 'idle'>, CastingProgress> = {
   casting: { stage: 'casting', label: '排盘起卦', percent: 28 },
   analysis: { stage: 'analysis', label: '推演分析', percent: 58 },
-  summary: { stage: 'summary', label: '生成短答', percent: 84 },
+  reading: { stage: 'reading', label: '生成解读', percent: 84 },
   done: { stage: 'done', label: '完成', percent: 100 },
   error: { stage: 'error', label: '出错', percent: 100 },
 }
@@ -623,7 +622,7 @@ function ReadingAttachmentPanel({
           <Paperclip size={15} />
           <span>
             起卦资料
-            <small>AI 先给概要，可在这里打开卦象和完整解读。</small>
+            <small>当前对话显示解读，可在这里打开卦象和排盘信息。</small>
           </span>
         </span>
         <div>
@@ -639,7 +638,7 @@ function CastingProgressBar({ progress }: { progress: CastingProgress }) {
   const steps: Array<{ stage: Exclude<CastingStage, 'idle' | 'error'>; label: string }> = [
     { stage: 'casting', label: '排盘' },
     { stage: 'analysis', label: '分析' },
-    { stage: 'summary', label: '短答' },
+    { stage: 'reading', label: '解读' },
     { stage: 'done', label: '完成' },
   ]
   const activeIndex = Math.max(0, steps.findIndex((item) => item.stage === progress.stage))
@@ -912,7 +911,7 @@ function AuthedApp({
   const activeReading = readingsBySession[sessionId] ?? null
   const activeConversationReady = !!readySessions[sessionId]
   const activeCastingProgress = castingProgressBySession[sessionId] ?? IDLE_PROGRESS
-  const activeWorkflowRunning = ['casting', 'analysis', 'summary'].includes(activeCastingProgress.stage)
+  const activeWorkflowRunning = ['casting', 'analysis', 'reading'].includes(activeCastingProgress.stage)
 
   const refreshConversations = useCallback(async () => {
     try {
@@ -946,7 +945,7 @@ function AuthedApp({
   }, [activeConversationReady, conversations, sessionId])
   const pageBusy = historyLoading || activeWorkflowRunning || isRunning
   const backgroundTaskCount = Object.entries(castingProgressBySession).filter(([targetSessionId, progress]) =>
-    targetSessionId !== sessionId && ['casting', 'analysis', 'summary'].includes(progress.stage),
+    targetSessionId !== sessionId && ['casting', 'analysis', 'reading'].includes(progress.stage),
   ).length + Object.keys(runningSessions).filter((item) => item !== sessionId).length
 
   const selectConversation = async (conversation: ConversationSummary) => {
@@ -1059,57 +1058,23 @@ function AuthedApp({
       }))
       window.clearTimeout(analysisTimer)
       const resolvedSession = typeof data.sessionId === 'string' ? data.sessionId : targetSessionId
-      const assistantId = `assistant_summary_${Date.now().toString(36)}`
       if (activeSessionRef.current === targetSessionId && resolvedSession !== targetSessionId) {
         setSessionId(resolvedSession)
       }
+      const interpretation = cleanReportForDisplay(data.content || '解读生成完成。')
       setReadingsBySession((current) => ({ ...current, [resolvedSession]: data }))
       setReadySessions((current) => ({ ...current, [resolvedSession]: true }))
-      setSessionProgress(resolvedSession, CASTING_PROGRESS.summary)
+      setSessionProgress(resolvedSession, CASTING_PROGRESS.done)
       setSessionMessages(resolvedSession, [
         makeUiMessage('user', trimmedQuestion),
         {
-          id: assistantId,
+          id: `assistant_reading_${Date.now().toString(36)}`,
           role: 'assistant',
-          content: 'Roy 正在生成短答...',
+          content: interpretation,
           createdAt: new Date(),
-          status: { type: 'running' },
+          status: { type: 'complete', reason: 'stop' },
         },
       ])
-
-      let summary = ''
-      for await (const event of streamDivinationSummary(tokenRef.current, {
-        sessionId: resolvedSession,
-        question: trimmedQuestion,
-        chart: data.chart,
-        content: cleanReportForDisplay(data.content),
-        agentId: String(data.agentId || 'default'),
-      })) {
-        if (event.type === 'content' && event.content) {
-          summary += event.content
-          setSessionMessages(resolvedSession, (current) =>
-            current.map((item) =>
-              item.id === assistantId
-                ? { ...item, content: summary, status: { type: 'running' } }
-                : item,
-            ),
-          )
-        }
-        if (event.type === 'done') {
-          const finalSummary = cleanReportForDisplay(event.content || summary || '推演完成。')
-          setSessionMessages(resolvedSession, (current) =>
-            current.map((item) =>
-              item.id === assistantId
-                ? { ...item, content: finalSummary, status: { type: 'complete', reason: 'stop' } }
-                : item,
-            ),
-          )
-          setSessionProgress(resolvedSession, CASTING_PROGRESS.done)
-        }
-        if (event.type === 'error') {
-          throw new Error(event.error || '短答生成失败')
-        }
-      }
       await refreshConversations()
     } catch (err) {
       window.clearTimeout(analysisTimer)
@@ -1129,7 +1094,7 @@ function AuthedApp({
       if ((castingProgressBySession[targetSessionId] ?? IDLE_PROGRESS).stage !== 'done') {
         setCastingProgressBySession((current) => {
           const progress = current[targetSessionId]
-          return progress?.stage === 'summary' ? { ...current, [targetSessionId]: CASTING_PROGRESS.done } : current
+          return progress?.stage === 'reading' ? { ...current, [targetSessionId]: CASTING_PROGRESS.done } : current
         })
       }
     }
