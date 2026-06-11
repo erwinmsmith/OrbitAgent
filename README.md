@@ -226,6 +226,13 @@ Render 服务名或其他后端域名时，才需要在 Vercel 里显式填写
 `/api/v1`，否则深度推演这类长请求会先经过 Vercel rewrite，可能被代理层截断并
 返回 HTML 502。
 
+国内免梯访问的前端测试部署可走阿里云香港 OSS 静态站，见
+`docs/deployment/aliyun-hk-frontend.md`。脚本入口：
+
+```bash
+npm run deploy:web:aliyun-hk
+```
+
 本地开发仍可只使用本地 MongoDB/Redis 和 `.env`：
 
 ```env
