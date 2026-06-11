@@ -233,6 +233,10 @@ Render 服务名或其他后端域名时，才需要在 Vercel 里显式填写
 npm run deploy:web:aliyun-hk
 ```
 
+如果使用阿里云香港轻量应用服务器承载前后端，见
+`docs/deployment/aliyun-lightweight-server.md`。先运行只读审计脚本确认服务器现状，
+再执行部署。
+
 本地开发仍可只使用本地 MongoDB/Redis 和 `.env`：
 
 ```env

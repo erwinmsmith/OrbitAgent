@@ -18,6 +18,7 @@
     "build": "tsc && chmod +x dist/cli/index.js",
     "start": "node dist/app.js",
     "deploy:web:aliyun-hk": "bash scripts/deploy-web-aliyun-oss.sh",
+    "deploy:aliyun:audit-script": "bash scripts/audit-aliyun-server.sh",
     "typecheck": "tsc --noEmit",
     "test": "jest --forceExit",
     "test:unit": "jest --selectProjects unit --forceExit",
