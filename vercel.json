@@ -2,5 +2,11 @@
   "framework": "vite",
   "installCommand": "npm --prefix web ci",
   "buildCommand": "npm --prefix web run build",
-  "outputDirectory": "web/dist"
+  "outputDirectory": "web/dist",
+  "rewrites": [
+    {
+      "source": "/api/v1/:path*",
+      "destination": "https://orbit-agent-api.onrender.com/api/v1/:path*"
+    }
+  ]
 }

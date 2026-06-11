@@ -101,7 +101,7 @@ export interface DivinationAskBody {
 }
 
 async function parseResponse<T>(res: Response): Promise<T> {
-  const payload = (await res.json()) as ApiEnvelope<T>
+  const payload = await readJsonEnvelope<T>(res)
   if (!res.ok || !payload.success) {
     throw new ApiError(
       payload.error?.message ?? `Request failed with ${res.status}`,
@@ -110,6 +110,20 @@ async function parseResponse<T>(res: Response): Promise<T> {
     )
   }
   return payload.data
+}
+
+async function readJsonEnvelope<T>(res: Response): Promise<ApiEnvelope<T>> {
+  const body = await res.text()
+  try {
+    return JSON.parse(body) as ApiEnvelope<T>
+  } catch {
+    const preview = body.trim().replace(/\s+/g, ' ').slice(0, 140)
+    throw new ApiError(
+      `API returned a non-JSON response (${res.status}). ${preview || res.statusText || 'Empty response'}`,
+      res.status,
+      'NON_JSON_RESPONSE',
+    )
+  }
 }
 
 export async function inviteLogin(code: string): Promise<InviteLoginData> {
@@ -247,7 +261,7 @@ export async function* streamChat(
 
 async function throwStreamError(res: Response, fallback: string): Promise<never> {
   try {
-    const payload = (await res.json()) as ApiEnvelope<unknown>
+    const payload = await readJsonEnvelope<unknown>(res)
     throw new ApiError(
       payload.error?.message ?? `${fallback} with ${res.status}`,
       res.status,
