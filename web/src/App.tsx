@@ -8,7 +8,6 @@ import {
 } from '@assistant-ui/react'
 import ReactMarkdown from 'react-markdown'
 import {
-  BookOpen,
   Brain,
   CalendarDays,
   CheckCircle2,
@@ -47,7 +46,7 @@ const REFRESH_TOKEN_KEY = 'orbit.web.refreshToken'
 const USER_KEY = 'orbit.web.user'
 const DEFAULT_DIVINATION_PROMPT = '请结合卦象分析、解答问题。'
 
-type DetailPanel = 'chart' | 'why' | null
+type DetailPanel = 'chart' | null
 type AnalysisMode = 'quick' | 'deep'
 type CastingStage = 'idle' | 'casting' | 'analysis' | 'reading' | 'done' | 'error'
 
@@ -568,27 +567,16 @@ function DetailBlock({
   onClose: () => void
 }) {
   if (!panel) return null
-  const title = {
-    chart: '卦象',
-    why: '解读详情',
-  }[panel]
-  const lines = cleanReportForDisplay(reading?.content ?? '当前没有可展开的完整报告。').split('\n').slice(0, 160)
 
   return (
-    <section className="detail-block" aria-label={title}>
+    <section className="detail-block" aria-label="卦象">
       <div className="detail-head">
-        <p>{title}</p>
+        <p>卦象</p>
         <button type="button" onClick={onClose} aria-label="关闭详情">
           <X size={16} />
         </button>
       </div>
-      {panel === 'chart' ? (
-        <HexagramDetail reading={reading} />
-      ) : (
-        <div className="markdown-detail">
-          <ReactMarkdown>{lines.join('\n')}</ReactMarkdown>
-        </div>
-      )}
+      <HexagramDetail reading={reading} />
     </section>
   )
 }
@@ -627,7 +615,6 @@ function ReadingAttachmentPanel({
         </span>
         <div>
           {button('chart', <FileText size={15} />, '卦象')}
-          {button('why', <BookOpen size={15} />, '解读')}
         </div>
       </div>
     </div>
@@ -808,10 +795,6 @@ function DivinationWorkbench({
         <button type="button" onClick={() => onPanelChange(activePanel === 'chart' ? null : 'chart')} disabled={!reading}>
           <FileText size={16} />
           卦象
-        </button>
-        <button type="button" onClick={() => onPanelChange(activePanel === 'why' ? null : 'why')} disabled={!reading}>
-          <BookOpen size={16} />
-          解读
         </button>
       </div>
 
