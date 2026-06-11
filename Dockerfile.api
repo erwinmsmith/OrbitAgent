@@ -9,6 +9,7 @@ FROM deps AS build
 WORKDIR /app
 COPY tsconfig.json config.yaml ./
 COPY src ./src
+COPY docs/base_knowledge ./docs/base_knowledge
 RUN npm run build
 
 FROM node:20-bookworm-slim AS runtime
