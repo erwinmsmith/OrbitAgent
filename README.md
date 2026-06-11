@@ -235,7 +235,19 @@ npm run deploy:web:aliyun-hk
 
 如果使用阿里云香港轻量应用服务器承载前后端，见
 `docs/deployment/aliyun-lightweight-server.md`。先运行只读审计脚本确认服务器现状，
-再执行部署。
+再执行部署。已有宝塔/Nginx/Docker 业务的服务器推荐使用 Docker Compose：
+
+```bash
+cp .env.production.example .env.production
+# 填写 MONGODB_URI、DEEPSEEK_API_KEY、JWT_SECRET 等真实值
+docker compose -f docker-compose.aliyun.yml up -d --build
+```
+
+默认端口：
+
+- 前端容器：宿主机 `127.0.0.1:3101`
+- 后端容器：宿主机 `127.0.0.1:3100`
+- Redis：仅 compose 内部网络可访问
 
 本地开发仍可只使用本地 MongoDB/Redis 和 `.env`：
 

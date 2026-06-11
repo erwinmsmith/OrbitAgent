@@ -2,20 +2,26 @@
 
 目标：把前端和后端都放到阿里云中国香港轻量应用服务器。
 
-推荐架构：
+当前推荐架构是 Docker Compose + 服务器现有 Nginx 反代：
 
 ```text
 browser
-  -> http://<server-ip>/              Nginx 静态前端
-  -> http://<server-ip>/api/v1/*      Nginx 反代本机 Node 后端
+  -> http://orbit.code-soul.com/            现有宝塔/Nginx vhost
+      -> 127.0.0.1:3101                    前端 Nginx 容器
+  -> http://orbit.code-soul.com/api/v1/*    现有宝塔/Nginx vhost
+      -> 127.0.0.1:3100                    后端 Node 容器
 
-Node 后端
+Docker Compose
+  -> orbit-agent-api                  Node 后端
+  -> orbit-agent-web                  前端静态资源 Nginx
+  -> orbit-agent-redis                内部 Redis
+
+后端
   -> MongoDB Atlas                    继续使用现有云数据库
-  -> 本机 Redis                       用于临时记忆和队列
   -> DeepSeek/Zhipu 等模型 API
 ```
 
-这样前后端都在香港服务器上；数据库暂时不搬，避免迁移用户和历史会话数据。
+这样前后端都在香港服务器上；数据库暂时不搬，避免迁移用户和历史会话数据。Compose 默认只把前后端暴露到宿主机 `127.0.0.1`，不会直接公开容器端口。
 
 ## 第一步：确认服务器现状
 
@@ -55,33 +61,83 @@ ssh -i /path/to/key.pem root@<server-ip>
 
 ## 第二步：准备环境变量
 
-部署脚本会在服务器创建：
+Docker 部署使用仓库根目录：
 
 ```text
-/opt/orbit-agent/.env
+/opt/orbit-agent/.env.production
 ```
 
 你需要把真实值填进去：
 
 ```env
 NODE_ENV=production
-HOST=127.0.0.1
+HOST=0.0.0.0
 PORT=3000
 MONGODB_URI=mongodb+srv://<user>:<password>@<cluster>/<db>?retryWrites=true&w=majority
-REDIS_HOST=127.0.0.1
+REDIS_HOST=redis
 REDIS_PORT=6379
 DEEPSEEK_API_KEY=<your_deepseek_key>
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 JWT_SECRET=<long_random_secret>
 JWT_REFRESH_SECRET=<long_random_secret>
-ORBIT_EMBEDDER=hash
+ORBIT_EMBEDDER=remote-zhipu
+ZHIPU_API_KEY=<your_zhipu_key>
 ```
 
 如果 MongoDB Atlas 没有放开服务器出口 IP，需要在 Atlas Network Access 中加入轻量服务器公网 IP。
 
 ## 第三步：部署
 
-确认审计没有发现需要保留的已有站点后，再执行：
+### 方案 A：Docker Compose，推荐用于已有业务的服务器
+
+服务器上准备目录并拉取代码：
+
+```bash
+sudo mkdir -p /opt/orbit-agent
+sudo chown -R "$USER:$USER" /opt/orbit-agent
+git clone --branch main https://github.com/erwinmsmith/OrbitAgent.git /opt/orbit-agent
+```
+
+如果目录已存在：
+
+```bash
+cd /opt/orbit-agent
+git fetch origin
+git checkout main
+git pull --ff-only origin main
+```
+
+创建生产环境文件：
+
+```bash
+cd /opt/orbit-agent
+cp .env.production.example .env.production
+nano .env.production
+```
+
+启动容器：
+
+```bash
+docker compose -f docker-compose.aliyun.yml up -d --build
+docker compose -f docker-compose.aliyun.yml ps
+```
+
+安装当前服务器的宝塔/Nginx vhost：
+
+```bash
+SERVER_NAME=orbit.code-soul.com bash scripts/install-aliyun-docker-vhost.sh
+```
+
+如果 DNS 还没生效，可以先用 Host header 测试：
+
+```bash
+curl -H 'Host: orbit.code-soul.com' http://127.0.0.1/
+curl -H 'Host: orbit.code-soul.com' http://127.0.0.1/api/v1/health
+```
+
+### 方案 B：systemd 部署，仅适合干净机器
+
+`scripts/provision-aliyun-lightweight.sh` 会安装宿主机 Node/Nginx/Redis 并改写站点配置，只适合没有现有站点的干净机器。确认审计没有发现需要保留的已有站点后，才执行：
 
 ```bash
 scp scripts/provision-aliyun-lightweight.sh root@<server-ip>:/tmp/provision-aliyun-lightweight.sh
@@ -106,13 +162,13 @@ http://<server-ip>/api/v1/health
 查看后端日志：
 
 ```bash
-ssh root@<server-ip> 'journalctl -u orbit-agent -f'
+ssh root@<server-ip> 'cd /opt/orbit-agent && docker compose -f docker-compose.aliyun.yml logs -f api'
 ```
 
 重启后端：
 
 ```bash
-ssh root@<server-ip> 'systemctl restart orbit-agent'
+ssh root@<server-ip> 'cd /opt/orbit-agent && docker compose -f docker-compose.aliyun.yml restart api'
 ```
 
 更新代码并重新构建：
@@ -120,14 +176,10 @@ ssh root@<server-ip> 'systemctl restart orbit-agent'
 ```bash
 ssh root@<server-ip> '
   cd /opt/orbit-agent &&
+  git fetch origin &&
+  git checkout main &&
   git pull --ff-only origin main &&
-  npm ci --include=dev &&
-  npm run build &&
-  npm --prefix web ci &&
-  VITE_ORBIT_API_BASE=/api/v1 npm --prefix web run build &&
-  rsync -a --delete web/dist/ /var/www/orbit-agent/ &&
-  chown -R www-data:www-data /var/www/orbit-agent &&
-  systemctl restart orbit-agent &&
+  docker compose -f docker-compose.aliyun.yml up -d --build &&
   systemctl reload nginx
 '
 ```
@@ -154,9 +206,7 @@ certbot --nginx -d orbit.code-soul.com
 部署脚本会管理这些路径和服务：
 
 - `/opt/orbit-agent`
-- `/var/www/orbit-agent`
-- `/etc/systemd/system/orbit-agent.service`
-- `/etc/nginx/sites-available/orbit-agent`
-- `/etc/nginx/sites-enabled/orbit-agent`
+- Docker Compose project `orbit-agent`
+- 宝塔 Nginx vhost `/www/server/panel/vhost/nginx/orbit.code-soul.com.conf`
 
-如果审计发现这些路径或 80 端口已有业务，需要先确认再部署。
+如果审计发现 `3100` 或 `3101` 已被占用，可以通过 `API_PORT` / `WEB_PORT` 调整 compose 和 vhost 端口。
