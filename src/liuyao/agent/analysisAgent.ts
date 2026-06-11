@@ -307,6 +307,24 @@ export interface AnalysisResult {
   debug: AnalysisDebug;
 }
 
+function normalizeStyleInstruction(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return value
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 1600);
+}
+
+function renderStyleInstructionBlock(styleInstruction: string): string {
+  if (!styleInstruction) return '';
+  return [
+    '【输出人设与侧重点】',
+    styleInstruction,
+    '硬性边界：以上人设只允许影响表达风格、侧重点和展开顺序；不得改变、弱化、夸大或歪曲 ChartBrief 中的本卦、变卦、动爻、世应、旺衰、空破、十二长生、飞神伏神、用神候选等排盘事实。',
+    '',
+  ].join('\n');
+}
+
 /** Run the multi-stage analysis pipeline on a stored chart. */
 export async function runAnalysisAgent(
   chart: ChartResult,
@@ -331,6 +349,8 @@ export async function runAnalysisAgent(
      * Clamped to [1, 5]. Default 3.
      */
     angles?: number;
+    /** Optional user-selected output persona / focus instruction. */
+    styleInstruction?: string;
   } = {},
 ): Promise<AnalysisResult> {
   const totalStart = Date.now();
@@ -344,6 +364,8 @@ export async function runAnalysisAgent(
 
   const llm = getLLMManager();
   const modelId = options.model || llm.getDefaultModel();
+  const styleInstruction = normalizeStyleInstruction(options.styleInstruction);
+  const styleInstructionBlock = renderStyleInstructionBlock(styleInstruction);
 
   // ─── Stage 1: LLM #1 — understand ──────────────────────────────
   const thinking = options.thinking === true;
@@ -478,6 +500,7 @@ export async function runAnalysisAgent(
         `【理解阶段输出】\n${parsedUnderstand.intermediateUnderstanding || '(理解阶段未给出)'}\n` +
         `  关注用神：${parsedUnderstand.focusYongshen.join('、') || '(无)'}\n` +
         `  细化的提问类型：${parsedUnderstand.refinedQuestionType}\n\n` +
+        styleInstructionBlock +
         `【六爻知识库召回片段】\n${citationsBlock}\n\n` +
         `请写综合分析报告。` },
     ];
@@ -503,6 +526,7 @@ export async function runAnalysisAgent(
         provider: synthResp.provider,
         usage: synthResp.usage,
         contentLength: (synthResp.content || '').length,
+        styleInstruction: Boolean(styleInstruction),
       },
     });
   } else {
@@ -583,6 +607,7 @@ export async function runAnalysisAgent(
               `【用户问题】\n${brief.question || '(通用分析)'}\n\n` +
               `【本角度】\n${angle.name}\n${angle.perspective}\n\n` +
               `【ChartBrief】\n${brief.asMarkdown}\n\n` +
+              styleInstructionBlock +
               `【本角度的 RAG 召回片段】\n${angleCitationsBlock}\n\n` +
               `请按本角度的 perspective 写一段 300-500 字的分析。` },
           ];
@@ -654,6 +679,7 @@ export async function runAnalysisAgent(
           `【理解阶段输出】\n${parsedUnderstand.intermediateUnderstanding || '(理解阶段未给出)'}\n` +
           `  关注用神：${parsedUnderstand.focusYongshen.join('、') || '(无)'}\n` +
           `  细化的提问类型：${parsedUnderstand.refinedQuestionType}\n\n` +
+          styleInstructionBlock +
           `【多角度分析】\n${perAngleBlock}\n\n` +
           `请整合以上多个角度的发现，写一份 6-9 段综合分析报告。` },
       ];
@@ -680,6 +706,7 @@ export async function runAnalysisAgent(
           usage: synthResp.usage,
           contentLength: (synthResp.content || '').length,
           angleCount: perAngle.length,
+          styleInstruction: Boolean(styleInstruction),
         },
       });
     }

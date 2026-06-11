@@ -399,6 +399,7 @@ router.post('/ask', asyncHandler(async (req: Request, res: Response) => {
     debug,
     thinking,
     angles,
+    styleInstruction: message,
   });
   const content = renderAnalysisReport(analysis.report, { showCitations: debug });
 
@@ -669,6 +670,7 @@ router.post('/analyze', asyncHandler(async (req: Request, res: Response) => {
     debug: includeDebug,
     thinking,
     angles: angleBudget,
+    styleInstruction: body.styleInstruction || body.message,
   });
   // Backward-compat: when the caller didn't ask for debug, return
   // just the report at the top level (the old shape).

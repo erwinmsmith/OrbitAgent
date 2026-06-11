@@ -692,6 +692,88 @@ h1 {
   accent-color: var(--cinnabar);
 }
 
+.persona-panel {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 253, 247, 0.62);
+}
+
+.persona-options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.persona-options button {
+  min-width: 0;
+  min-height: 54px;
+  display: grid;
+  gap: 3px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(23, 21, 18, 0.025);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.persona-options button:hover,
+.persona-options button[data-active='true'] {
+  border-color: rgba(22, 116, 95, 0.42);
+  background: rgba(22, 116, 95, 0.11);
+}
+
+.persona-options button strong {
+  font-size: 14px;
+}
+
+.persona-options button small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.custom-persona-box {
+  display: grid;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.custom-persona-box span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.custom-persona-box textarea {
+  width: 100%;
+  min-height: 86px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink);
+  font: inherit;
+  line-height: 1.55;
+  padding: 10px 11px;
+}
+
+.custom-persona-box textarea:focus {
+  border-color: var(--jade);
+  box-shadow: 0 0 0 3px rgba(22, 116, 95, 0.12);
+  outline: none;
+}
+
+.custom-persona-box small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .primary-action {
   min-height: 40px;
   display: inline-flex;
@@ -1437,6 +1519,10 @@ h1 {
   .mode-toggle button {
     flex: 1;
     justify-content: center;
+  }
+
+  .persona-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .angle-control,

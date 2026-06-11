@@ -45,9 +45,11 @@ const TOKEN_KEY = 'orbit.web.accessToken'
 const REFRESH_TOKEN_KEY = 'orbit.web.refreshToken'
 const USER_KEY = 'orbit.web.user'
 const DEFAULT_DIVINATION_PROMPT = '请结合卦象分析、解答问题。'
+const CUSTOM_PERSONA_TEMPLATE = '示例：请用冷静但鼓励的语气输出；先说明可操作机会，再说明风险边界；避免绝对断言。'
 
 type DetailPanel = 'chart' | null
 type AnalysisMode = 'quick' | 'deep'
+type PersonaMode = 'objective' | 'positive' | 'conservative' | 'custom'
 type CastingStage = 'idle' | 'casting' | 'analysis' | 'reading' | 'done' | 'error'
 type CoinYangCount = 0 | 1 | 2 | 3
 type ManualCoinCounts = Array<CoinYangCount | null>
@@ -88,9 +90,48 @@ const COIN_YANG_OPTIONS: Array<{ count: CoinYangCount; yao: 6 | 7 | 8 | 9; label
   { count: 2, yao: 8, label: '2 阳' },
   { count: 3, yao: 9, label: '3 阳' },
 ]
+const PERSONA_OPTIONS: Array<{ id: PersonaMode; label: string; hint: string; prompt: string }> = [
+  {
+    id: 'objective',
+    label: '客观',
+    hint: '平衡机会与风险',
+    prompt: '采用客观中性的人设：平衡呈现机会、风险、限制与不确定性，不刻意乐观或悲观。',
+  },
+  {
+    id: 'positive',
+    label: '积极',
+    hint: '多关注机会',
+    prompt: '采用积极但克制的人设：在不违背卦象事实的前提下，多关注机会、转机、可行动空间和可争取的路径；风险仍要说清楚。',
+  },
+  {
+    id: 'conservative',
+    label: '保守',
+    hint: '多关注风险',
+    prompt: '采用保守谨慎的人设：在不违背卦象事实的前提下，多关注风险、阻碍、代价、边界和不宜冒进之处；机会仍要说清楚。',
+  },
+  {
+    id: 'custom',
+    label: '自定义',
+    hint: '自行输入提示词',
+    prompt: '',
+  },
+]
 
 function coinYangCountToYaoValue(count: CoinYangCount): 6 | 7 | 8 | 9 {
   return (count + 6) as 6 | 7 | 8 | 9
+}
+
+function buildPersonaPrompt(mode: PersonaMode, customPrompt: string): string {
+  const persona = mode === 'custom'
+    ? customPrompt.trim()
+    : PERSONA_OPTIONS.find((item) => item.id === mode)?.prompt
+  const resolvedPersona = persona || PERSONA_OPTIONS[0].prompt
+  return [
+    DEFAULT_DIVINATION_PROMPT,
+    '【输出人设与侧重点】',
+    resolvedPersona,
+    '注意：人设只影响表达风格和分析侧重点，不得改变、弱化或歪曲排盘事实；本卦、变卦、动爻、世应、旺衰、空破、十二长生、飞神伏神等判断必须以排盘结果为准。',
+  ].join('\n')
 }
 
 function makeSessionId() {
@@ -667,6 +708,8 @@ function DivinationWorkbench({
   manualCoinCounts,
   numberInputs,
   analysisMode,
+  personaMode,
+  customPersonaPrompt,
   angles,
   running,
   progress,
@@ -678,6 +721,8 @@ function DivinationWorkbench({
   onManualCoinCountChange,
   onNumberInputChange,
   onAnalysisModeChange,
+  onPersonaModeChange,
+  onCustomPersonaPromptChange,
   onAnglesChange,
   onSubmit,
   onPanelChange,
@@ -688,6 +733,8 @@ function DivinationWorkbench({
   manualCoinCounts: ManualCoinCounts
   numberInputs: string[]
   analysisMode: AnalysisMode
+  personaMode: PersonaMode
+  customPersonaPrompt: string
   angles: number
   running: boolean
   progress: CastingProgress
@@ -699,6 +746,8 @@ function DivinationWorkbench({
   onManualCoinCountChange: (index: number, value: CoinYangCount) => void
   onNumberInputChange: (index: number, value: string) => void
   onAnalysisModeChange: (mode: AnalysisMode) => void
+  onPersonaModeChange: (mode: PersonaMode) => void
+  onCustomPersonaPromptChange: (value: string) => void
   onAnglesChange: (angles: number) => void
   onSubmit: () => void
   onPanelChange: (panel: DetailPanel) => void
@@ -810,6 +859,38 @@ function DivinationWorkbench({
         <p className="method-help">{methodHelp}</p>
       </div>
 
+      <div className="persona-panel">
+        <div className="field-heading">
+          <span>Agent 人设</span>
+          <small>通过提示词调整解读侧重点，不改变排盘事实。</small>
+        </div>
+        <div className="persona-options" role="group" aria-label="Agent 人设">
+          {PERSONA_OPTIONS.map((item) => (
+            <button
+              type="button"
+              key={item.id}
+              data-active={personaMode === item.id ? 'true' : undefined}
+              onClick={() => onPersonaModeChange(item.id)}
+            >
+              <strong>{item.label}</strong>
+              <small>{item.hint}</small>
+            </button>
+          ))}
+        </div>
+        {personaMode === 'custom' ? (
+          <label className="custom-persona-box">
+            <span>自定义提示词</span>
+            <textarea
+              value={customPersonaPrompt}
+              onChange={(event) => onCustomPersonaPromptChange(event.target.value)}
+              placeholder={CUSTOM_PERSONA_TEMPLATE}
+              rows={3}
+            />
+            <small>{CUSTOM_PERSONA_TEMPLATE}</small>
+          </label>
+        ) : null}
+      </div>
+
       <div className="action-row">
         <div className="mode-toggle" role="group" aria-label="分析模式">
           <button
@@ -883,6 +964,8 @@ function AuthedApp({
   const [manualCoinCounts, setManualCoinCounts] = useState<ManualCoinCounts>(() => [...EMPTY_MANUAL_COIN_COUNTS])
   const [numberInputs, setNumberInputs] = useState<string[]>(() => [...EMPTY_NUMBER_INPUTS])
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>('quick')
+  const [personaMode, setPersonaMode] = useState<PersonaMode>('objective')
+  const [customPersonaPrompt, setCustomPersonaPrompt] = useState('')
   const [angles, setAngles] = useState(3)
   const [workflowError, setWorkflowError] = useState('')
   const [readingsBySession, setReadingsBySession] = useState<Record<string, Record<string, unknown> | null>>({})
@@ -1096,7 +1179,7 @@ function AuthedApp({
       const data = await withAuthRetry((accessToken) => askDivination(accessToken, {
         sessionId: targetSessionId,
         question: trimmedQuestion,
-        message: DEFAULT_DIVINATION_PROMPT,
+        message: buildPersonaPrompt(personaMode, customPersonaPrompt),
         timezone: 'Asia/Shanghai',
         datetime: new Date().toISOString(),
         debug: import.meta.env.DEV,
@@ -1214,6 +1297,8 @@ function AuthedApp({
                 manualCoinCounts={manualCoinCounts}
                 numberInputs={numberInputs}
                 analysisMode={analysisMode}
+                personaMode={personaMode}
+                customPersonaPrompt={customPersonaPrompt}
                 angles={angles}
                 running={activeWorkflowRunning}
                 progress={activeCastingProgress}
@@ -1235,6 +1320,8 @@ function AuthedApp({
                   setNumberInputs((current) => current.map((item, i) => (i === index ? value : item)))
                 }}
                 onAnalysisModeChange={setAnalysisMode}
+                onPersonaModeChange={setPersonaMode}
+                onCustomPersonaPromptChange={setCustomPersonaPrompt}
                 onAnglesChange={setAngles}
                 onSubmit={runDivination}
                 onPanelChange={setActivePanel}
