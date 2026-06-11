@@ -795,7 +795,9 @@ export function renderLineDetails(data: any): void {
     const marker = shiYing ? ` ${shiYing}` : '';
     const stage = formatTwelveStage(l);
     const stageMark = stage ? ` [十二长生: ${stage}]` : '';
-    const original = `${formatStemBranchElement(l.stem, l.branch, l.element)} ${l.sixRelative} 临${l.sixGod}${voidMark}${stageMark}${movingMark}${marker}`;
+    const strength = formatStrength(l);
+    const strengthMark = strength ? ` [旺衰: ${strength}]` : '';
+    const original = `${formatStemBranchElement(l.stem, l.branch, l.element)} ${l.sixRelative} 临${l.sixGod}${voidMark}${stageMark}${strengthMark}${movingMark}${marker}`;
     const hidden = formatHiddenGods(l);
     if (hasMoving) {
       const changed = l.changedSixRelative
@@ -806,6 +808,11 @@ export function renderLineDetails(data: any): void {
       console.log(chalk.gray(`    ${l.position}: ${original}${hidden ? `  |  伏: ${hidden}` : ''}`));
     }
   }
+}
+
+function formatStrength(line: any): string {
+  const labels = Array.isArray(line?.strength?.labels) ? line.strength.labels : [];
+  return labels.filter(Boolean).join('/');
 }
 
 function formatTwelveStage(line: any): string {

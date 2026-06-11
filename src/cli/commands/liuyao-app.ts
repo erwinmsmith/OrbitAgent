@@ -864,9 +864,14 @@ function buildFullChartLines(data: any): string[] {
   ];
   const lines = Array.isArray(chart.lines) ? chart.lines : [];
   for (const l of lines) {
-    rows.push(`${l.position}  ${l.stem || ''}${l.branch || ''} ${l.element || ''}  ${l.sixRelative || ''}  ${l.sixGod || ''}${l.isShi ? '  世' : ''}${l.isYing ? '  应' : ''}${l.void ? '  旬空' : ''}${l.moving ? `  动→${l.changedStem || ''}${l.changedBranch || ''} ${l.changedSixRelative || ''}` : ''}${formatTwelveStage(l) ? `  十二长生：${formatTwelveStage(l)}` : ''}${formatHiddenGods(l) ? `  伏：${formatHiddenGods(l)}` : ''}`);
+    rows.push(`${l.position}  ${l.stem || ''}${l.branch || ''} ${l.element || ''}  ${l.sixRelative || ''}  ${l.sixGod || ''}${l.isShi ? '  世' : ''}${l.isYing ? '  应' : ''}${l.void ? '  旬空' : ''}${l.moving ? `  动→${l.changedStem || ''}${l.changedBranch || ''} ${l.changedSixRelative || ''}` : ''}${formatTwelveStage(l) ? `  十二长生：${formatTwelveStage(l)}` : ''}${formatStrength(l) ? `  旺衰：${formatStrength(l)}` : ''}${formatHiddenGods(l) ? `  伏：${formatHiddenGods(l)}` : ''}`);
   }
   return rows;
+}
+
+function formatStrength(line: any): string {
+  const labels = Array.isArray(line?.strength?.labels) ? line.strength.labels : [];
+  return labels.filter(Boolean).join('/');
 }
 
 function formatTwelveStage(line: any): string {

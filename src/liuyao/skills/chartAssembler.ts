@@ -278,6 +278,21 @@ export function assembleChart(input: AssembleInput): ChartResult {
     }
   }
 
+  // Step 9.9 — 旺衰 / 日月生克 / 空破. Strength is computed after
+  // voidSkill so 旬空 can be included in the same line.strength block.
+  const strength: StrengthSkillOutput | null = safe(() => strengthSkill({
+    lines,
+    monthBranch: input.monthBranch,
+    dayBranch: input.dayBranch,
+  }), 'strengthSkill', warnings);
+  for (const item of strength?.lineStrengths ?? []) {
+    const line = lines[item.position - 1];
+    if (line) line.strength = {
+      labels: item.labels,
+      score: item.score,
+    };
+  }
+
   // Step 10 — Branch relations
   let relations: ChartResult['relations'];
   const brOut: BranchRelationSkillOutput | null = safe(() => branchRelationSkill({

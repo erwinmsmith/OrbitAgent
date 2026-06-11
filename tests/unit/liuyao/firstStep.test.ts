@@ -34,6 +34,7 @@ import { castSkill } from '../../../src/liuyao/skills/castSkill';
 import { yaoToBit, isMoving } from '../../../src/liuyao/constants/yao';
 import { buildChartBrief } from '../../../src/liuyao/agent/chartBrief';
 import { twelveStageFor } from '../../../src/liuyao/constants/twelveStages';
+import { strengthLabelsForLine } from '../../../src/liuyao/constants/strength';
 
 describe('64-hexagram table (from 64卦数据.json)', () => {
   it('has all 64 hexagrams in 文王 order', () => {
@@ -214,6 +215,13 @@ describe('voidSkill', () => {
 });
 
 describe('assembleChart — full first-step wiring', () => {
+  it('strengthLabelsForLine derives monthly strength and day/month relations', () => {
+    expect(strengthLabelsForLine('寅', '寅', '子')).toEqual(['旺', '得月扶', '得日生']);
+    expect(strengthLabelsForLine('午', '寅', '子')).toEqual(['相', '得月生', '被日克', '日破']);
+    expect(strengthLabelsForLine('申', '寅', '子')).toEqual(['囚', '月破']);
+    expect(strengthLabelsForLine('辰', '寅', '子')).toEqual(['死', '被月克']);
+  });
+
   it('十二长生表 follows the 六爻五行定局', () => {
     expect(twelveStageFor('金', '巳')).toBe('长生');
     expect(twelveStageFor('木', '亥')).toBe('长生');
@@ -230,6 +238,27 @@ describe('assembleChart — full first-step wiring', () => {
     expect(twelveStageFor('水', '巳')).toBe('绝');
     expect(twelveStageFor('土', '巳')).toBe('绝');
     expect(twelveStageFor('火', '亥')).toBe('绝');
+  });
+
+  it('adds strength labels and scores to chart lines', () => {
+    const r = assembleChart({
+      bits: [1, 1, 1, 1, 1, 1],
+      dayStem: '甲',
+      dayBranch: '子',
+      monthBranch: '寅',
+    });
+    expect(r.warnings ?? []).toEqual([]);
+    expect(r.lines[1]!.strength).toMatchObject({
+      labels: ['旺', '得月扶', '得日生'],
+      score: 6,
+    });
+    expect(r.lines[3]!.strength?.labels).toEqual(['相', '得月生', '被日克', '日破']);
+    expect(r.lines[4]!.strength?.labels).toEqual(['囚', '月破']);
+    expect(r.lines[5]!.strength?.labels).toEqual(['死', '被月克', '旬空']);
+
+    const brief = buildChartBrief(r);
+    expect(brief.lines[1]!.strengthTags).toEqual(['旺', '得月扶', '得日生']);
+    expect(brief.asMarkdown).toContain('旺/得月扶/得日生');
   });
 
   it('乾为天, 甲日子时: produces a fully-decorated chart with no warnings', () => {
