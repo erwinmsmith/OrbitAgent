@@ -863,19 +863,50 @@ function pickAngles(planned: PlannedAngle[], count: number): PlannedAngle[] {
  *  starts with `name` (e.g. "卦象概要" matches "## 卦象概要"). */
 function extractSection(markdown: string, name: string): string | null {
   if (!markdown) return null;
-  // Heading patterns: "## 卦象概要", "### 卦象概要", "**卦象概要**", "① 卦象概要"...
-  const re = new RegExp(
-    `^[#>*\\s]*\\d*\\s*[、.)]?\\s*\\**${name}\\**[:：]?\\s*$`,
-    'm',
-  );
+  const re = sectionHeadingRe(name, 'm');
   const m = re.exec(markdown);
   if (!m) return null;
   const start = m.index + m[0].length;
-  // Find the next heading (line starting with #) or end of doc.
+  const inline = String(m[1] || '').trim();
+  // Find the next report-section heading or end of doc. LLMs often
+  // emit headings as "一、卦象概要" without markdown hashes, so a
+  // plain "# heading" check is not enough here.
   const tail = markdown.slice(start);
-  const nextHeading = /^\s*#{1,6}\s+/m.exec(tail);
+  const nextHeading = anySectionHeadingRe('m').exec(tail);
   const end = nextHeading ? nextHeading.index : tail.length;
-  return tail.slice(0, end).trim();
+  return [inline, tail.slice(0, end).trim()].filter(Boolean).join('\n').trim();
+}
+
+const SECTION_NAMES = [
+  '卦象概要',
+  '本卦解释',
+  '变卦解释',
+  '动爻分析',
+  '世应关系',
+  '用神分析',
+  '旺衰与关系',
+  '旺衰、空破与冲合',
+  '综合判断',
+  '不确定性与补充信息',
+  '不确定性与需要补充的信息',
+];
+
+function sectionHeadingRe(name: string, flags: string): RegExp {
+  return new RegExp(
+    `^\\s*(?:#{1,6}\\s*)?(?:>\\s*)?(?:[①②③④⑤⑥⑦⑧⑨⑩]|\\d+|[一二三四五六七八九十]+)?\\s*[、.．)]?\\s*\\**${escapeRegExp(name)}\\**\\s*[:：]?\\s*(.*)$`,
+    flags,
+  );
+}
+
+function anySectionHeadingRe(flags: string): RegExp {
+  return new RegExp(
+    `^\\s*(?:#{1,6}\\s*)?(?:>\\s*)?(?:[①②③④⑤⑥⑦⑧⑨⑩]|\\d+|[一二三四五六七八九十]+)?\\s*[、.．)]?\\s*\\**(?:${SECTION_NAMES.map(escapeRegExp).join('|')})\\**\\s*[:：]?\\s*.*$`,
+    flags,
+  );
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function deriveMissingContext(brief: ChartBrief, p: ParsedUnderstand): string[] {

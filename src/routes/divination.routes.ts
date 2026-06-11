@@ -244,33 +244,33 @@ function renderAnalysisReport(report: AnalysisReport, options: { showCitations: 
     looksLikeCompleteMarkdownReport(report.synthesis) &&
     (!report.summary || report.summary.includes('未生成概要段'))
   ) {
-    return appendReportExtras(report.synthesis.trim(), report, options);
+    return appendReportExtras(normalizeReportHeadings(report.synthesis.trim()), report, options);
   }
 
   const sections: Array<[keyof AnalysisReport, string]> = [
-    ['summary', '一、卦象概要'],
-    ['originalHexagramInterpretation', '二、本卦解释'],
-    ['changedHexagramInterpretation', '三、变卦解释'],
-    ['movingLineAnalysis', '四、动爻分析'],
-    ['shiYingAnalysis', '五、世应关系'],
-    ['yongshenAnalysis', '六、用神分析'],
-    ['strengthAndRelations', '七、旺衰、空破与冲合'],
-    ['synthesis', '八、综合判断'],
+    ['summary', '卦象概要'],
+    ['originalHexagramInterpretation', '本卦解释'],
+    ['changedHexagramInterpretation', '变卦解释'],
+    ['movingLineAnalysis', '动爻分析'],
+    ['shiYingAnalysis', '世应关系'],
+    ['yongshenAnalysis', '用神分析'],
+    ['strengthAndRelations', '旺衰、空破与冲合'],
+    ['synthesis', '综合判断'],
   ];
   const out: string[] = [];
   for (const [key, label] of sections) {
     const value = report[key];
     if (typeof value === 'string' && value.trim()) {
-      out.push(`## ${label}\n\n${formatCitationDisplay(value.trim(), options)}`);
+      out.push(`## ${numberedSectionTitle(out.length, label)}\n\n${formatCitationDisplay(value.trim(), options)}`);
     }
   }
   if (report.uncertainties?.length) {
-    out.push(`## 九、不确定性与需要补充的信息\n\n${report.uncertainties.map((u) => `- ${u}`).join('\n')}`);
+    out.push(`## ${numberedSectionTitle(out.length, '不确定性与需要补充的信息')}\n\n${report.uncertainties.map((u) => `- ${u}`).join('\n')}`);
   }
   if (options.showCitations && report.citations?.length) {
     out.push(`## 引用\n\n${report.citations.map((c) => `- ${c.source} (${c.score.toFixed(3)}): ${c.snippet}`).join('\n')}`);
   }
-  return formatCitationDisplay(out.join('\n\n').trim(), options);
+  return normalizeReportHeadings(formatCitationDisplay(out.join('\n\n').trim(), options));
 }
 
 function looksLikeCompleteMarkdownReport(value: string | undefined): boolean {
@@ -278,6 +278,7 @@ function looksLikeCompleteMarkdownReport(value: string | undefined): boolean {
   return value.includes('综合分析报告') ||
     value.includes('### ①') ||
     value.includes('#### ①') ||
+    /^#{0,6}\s*[一二三四五六七八九十]+[、.．)]\s*卦象概要/m.test(value) ||
     value.includes('分析角度：');
 }
 
@@ -298,6 +299,23 @@ function formatCitationDisplay(markdown: string, options: { showCitations: boole
     .replace(/\s*(?:\[|【)cite:[^\]】]+(?:\]|】)/g, '')
     .replace(/\n{0,2}#{1,6}\s*引用[\s\S]*$/m, '')
     .trim();
+}
+
+const CHINESE_SECTION_NUMBERS = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+
+function numberedSectionTitle(index: number, title: string): string {
+  return `${CHINESE_SECTION_NUMBERS[index] ?? String(index + 1)}、${title}`;
+}
+
+function normalizeReportHeadings(markdown: string): string {
+  let index = 0;
+  return markdown.replace(
+    /^(#{1,6}\s*)?(?:[①②③④⑤⑥⑦⑧⑨⑩]|\d+|[一二三四五六七八九十]+)[、.．)]\s*(卦象概要|本卦解释|变卦解释|动爻分析|世应关系|用神分析|旺衰、空破与冲合|旺衰与关系|综合判断|不确定性与(?:需要)?补充(?:的)?信息)(.*)$/gm,
+    (_match, hashes = '## ', title: string, rest = '') => {
+      const cleanTitle = title === '旺衰与关系' ? '旺衰、空破与冲合' : title;
+      return `${hashes || '## '}${numberedSectionTitle(index++, cleanTitle)}${rest}`;
+    },
+  );
 }
 
 // ─── POST /cast ───────────────────────────────────────────────────────

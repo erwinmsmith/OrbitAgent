@@ -296,24 +296,25 @@ export function registerDivination(program: Command): void {
         const report = data.report ?? data;
         // Render the report sections in fixed order.
         const order = [
-          ['summary',                       '一、排盘摘要'],
-          ['originalHexagramInterpretation','二、本卦状态'],
-          ['changedHexagramInterpretation','三、变卦趋势'],
-          ['movingLineAnalysis',           '四、动爻分析'],
-          ['shiYingAnalysis',              '五、世应关系'],
-          ['yongshenAnalysis',             '六、用神与关键六亲'],
-          ['strengthAndRelations',         '七、旺衰、空破与冲合'],
-          ['synthesis',                     '八、综合判断'],
+          ['summary',                       '排盘摘要'],
+          ['originalHexagramInterpretation','本卦状态'],
+          ['changedHexagramInterpretation','变卦趋势'],
+          ['movingLineAnalysis',           '动爻分析'],
+          ['shiYingAnalysis',              '世应关系'],
+          ['yongshenAnalysis',             '用神与关键六亲'],
+          ['strengthAndRelations',         '旺衰、空破与冲合'],
+          ['synthesis',                     '综合判断'],
         ];
+        let sectionIndex = 0;
         for (const [k, label] of order) {
           if (report[k]) {
-            console.log(chalk.bold(label));
+            console.log(chalk.bold(numberedSectionTitle(sectionIndex++, label)));
             console.log(report[k]);
             console.log();
           }
         }
         if (report.uncertainties?.length) {
-          console.log(chalk.bold('九、不确定性与需要补充的信息'));
+          console.log(chalk.bold(numberedSectionTitle(sectionIndex++, '不确定性与需要补充的信息')));
           for (const u of report.uncertainties) console.log(`- ${u}`);
           console.log();
         }
@@ -876,6 +877,12 @@ function renderLine(
     return chalk.cyan(line);
   }
   return chalk.gray(line);
+}
+
+const CHINESE_SECTION_NUMBERS = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+
+function numberedSectionTitle(index: number, title: string): string {
+  return `${CHINESE_SECTION_NUMBERS[index] ?? String(index + 1)}、${title}`;
 }
 
 /** Render the 本卦 and 变卦 side-by-side. Top line is 上爻, bottom is 初爻.
