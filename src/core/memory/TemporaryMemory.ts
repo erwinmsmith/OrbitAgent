@@ -95,10 +95,10 @@ export class TemporaryMemory implements TempMemoryOptions {
     const maxMessages = this.maxPairs * 2;
 
     if (count > maxMessages) {
-      // Remove oldest messages to get back to limit
+      // Sliding window: keep the newest maxMessages entries.
       const toRemove = count - maxMessages;
-      await redis.xtrim(key, 'MAXLEN', toRemove);
-      logger.debug('Trimmed temporary memory', { sessionId, removed: toRemove });
+      await redis.xtrim(key, 'MAXLEN', maxMessages);
+      logger.debug('Trimmed temporary memory', { sessionId, removed: toRemove, maxMessages });
     }
   }
 
