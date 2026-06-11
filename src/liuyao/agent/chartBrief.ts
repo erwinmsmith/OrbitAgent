@@ -47,6 +47,13 @@ export interface BriefLine {
     relation: string;
     classicalName: string;
   }>;
+  twelveStage?: {
+    byDay?: string;
+    byChangedBranch?: string;
+    sourceTable: string;
+    interpretationLevel: string;
+    notes: string[];
+  };
   strengthTags: string[];
 }
 
@@ -147,6 +154,15 @@ function formatLine(l: ChartLine): BriefLine {
       relation: h.relation,
       classicalName: h.classicalName,
     })),
+    twelveStage: l.twelveStage
+      ? {
+          byDay: l.twelveStage.byDay,
+          byChangedBranch: l.twelveStage.byChangedBranch,
+          sourceTable: l.twelveStage.sourceTable,
+          interpretationLevel: l.twelveStage.interpretationLevel,
+          notes: l.twelveStage.notes,
+        }
+      : undefined,
     strengthTags: l.strength?.labels ?? [],
   };
 }
@@ -285,8 +301,23 @@ function renderBriefMarkdown(b: ChartBrief): string {
     const hiddenStr = l.hiddenGods.length
       ? `；伏：${l.hiddenGods.map((h) => `${h.relative}${h.fushenStem}${h.fushenBranch}(${h.fushenElement})〔${h.classicalName}〕`).join('、')}`
       : '';
+    const stageParts = [
+      l.twelveStage?.byDay ? `日辰${l.twelveStage.byDay}` : '',
+      l.twelveStage?.byChangedBranch ? `动化${l.twelveStage.byChangedBranch}` : '',
+    ].filter(Boolean);
+    const stageStr = stageParts.length ? ` 十二长生：${stageParts.join(' / ')}` : '';
     const strengthStr = l.strengthTags.length ? ` ${l.strengthTags.join('/')}` : '';
-    out.push(`- 第${l.position}爻 ${yx} ${l.stem}${l.branch}(${l.element}) ${l.sixRelative} 临${l.sixGod}${tagStr}${moveStr}${hiddenStr}${strengthStr}`);
+    out.push(`- 第${l.position}爻 ${yx} ${l.stem}${l.branch}(${l.element}) ${l.sixRelative} 临${l.sixGod}${tagStr}${moveStr}${hiddenStr}${stageStr}${strengthStr}`);
+    if (l.twelveStage?.notes.length) {
+      out.push(`  - 十二长生提示：${l.twelveStage.notes.join('；')}`);
+    }
+  }
+
+  if (b.lines.some((l) => l.twelveStage)) {
+    out.push('\n## 十二长生使用边界');
+    out.push('- 本排盘只把十二长生作为辅助状态：可参考日辰与动爻化出之支。');
+    out.push('- 月建仍按旺衰、月破、生克处理，不机械套用胎养衰病吉凶。');
+    out.push('- 最终判断必须结合用神、世应、动变、空破、合冲与生克制化。');
   }
 
   if (b.hiddenGods.length) {

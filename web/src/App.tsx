@@ -247,6 +247,15 @@ function hiddenLineText(line: Record<string, unknown>): string {
   return hiddenList.join('、')
 }
 
+function twelveStageText(line: Record<string, unknown>): string {
+  const stage = asRecord(line.twelveStage)
+  const parts = [
+    textValue(stage.byDay, '') ? `日辰${textValue(stage.byDay, '')}` : '',
+    textValue(stage.byChangedBranch, '') ? `动化${textValue(stage.byChangedBranch, '')}` : '',
+  ].filter(Boolean)
+  return parts.join(' / ')
+}
+
 function hexagramSubtitle(hexagram: Record<string, unknown>): string {
   const palace = textValue(hexagram.palace, '').replace(/宫$/, '')
   const palaceType = textValue(hexagram.palaceType, '')
@@ -387,6 +396,7 @@ function HexagramDetail({ reading }: { reading: Record<string, unknown> | null }
               {line.isYing ? ' · 应' : ''}
               {line.moving ? ' · 动' : ''}
               {hiddenLineText(line) ? ` · 伏：${hiddenLineText(line)}` : ''}
+              {twelveStageText(line) ? ` · 十二长生：${twelveStageText(line)}` : ''}
             </small>
           </div>
         ))}

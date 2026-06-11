@@ -150,6 +150,26 @@ export interface StrengthSkillOutput {
   lineStrengths: LineStrength[];
 }
 
+// ─── 5.10.5 Twelve Stage Skill ───────────────────────────────────────
+export type TwelveStage =
+  | '长生' | '沐浴' | '冠带' | '临官' | '帝旺' | '衰'
+  | '病' | '死' | '墓' | '绝' | '胎' | '养';
+export interface TwelveStageLine {
+  position: LinePosition;
+  byDay?: TwelveStage;
+  byChangedBranch?: TwelveStage;
+  sourceTable: '易隐_长生定局';
+  interpretationLevel: '辅助状态';
+  notes: string[];
+}
+export interface TwelveStageSkillInput {
+  lines: ChartLine[];
+  dayBranch?: EarthlyBranch;
+}
+export interface TwelveStageSkillOutput {
+  lineStages: TwelveStageLine[];
+}
+
 // ─── 5.11 Yongshen Skill ──────────────────────────────────────────────
 export interface YongshenSkillInput {
   question: string;

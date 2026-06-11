@@ -9,7 +9,7 @@ import type {
   Palace, PalaceType, LinePosition, YaoValue, YinYang, YinYangBit,
   QuestionType, BranchRelationType,
 } from './basic';
-import type { FuShenItem } from './skill';
+import type { FuShenItem, TwelveStageLine } from './skill';
 
 /** A single line in a hexagram chart, with all its decorations. */
 export interface ChartLine {
@@ -50,6 +50,7 @@ export interface ChartLine {
     labels: string[];          // human-readable tags: 旺/相/休/囚/死/得月生/...
     score?: number;            // optional numeric strength
   };
+  twelveStage?: TwelveStageLine; // 十二长生：日辰 + 动化支；辅助状态，不能单独断吉凶.
   hiddenGods?: FuShenItem[];    // 伏神 entries hidden under this line; the line itself is 飞神.
   tags?: string[];             // misc tags
 }

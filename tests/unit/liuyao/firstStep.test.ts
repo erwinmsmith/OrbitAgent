@@ -33,6 +33,7 @@ import { assembleChart } from '../../../src/liuyao/skills/chartAssembler';
 import { castSkill } from '../../../src/liuyao/skills/castSkill';
 import { yaoToBit, isMoving } from '../../../src/liuyao/constants/yao';
 import { buildChartBrief } from '../../../src/liuyao/agent/chartBrief';
+import { twelveStageFor } from '../../../src/liuyao/constants/twelveStages';
 
 describe('64-hexagram table (from 64卦数据.json)', () => {
   it('has all 64 hexagrams in 文王 order', () => {
@@ -213,6 +214,24 @@ describe('voidSkill', () => {
 });
 
 describe('assembleChart — full first-step wiring', () => {
+  it('十二长生表 follows the 六爻五行定局', () => {
+    expect(twelveStageFor('金', '巳')).toBe('长生');
+    expect(twelveStageFor('木', '亥')).toBe('长生');
+    expect(twelveStageFor('水', '申')).toBe('长生');
+    expect(twelveStageFor('土', '申')).toBe('长生');
+    expect(twelveStageFor('火', '寅')).toBe('长生');
+    expect(twelveStageFor('金', '丑')).toBe('墓');
+    expect(twelveStageFor('木', '未')).toBe('墓');
+    expect(twelveStageFor('水', '辰')).toBe('墓');
+    expect(twelveStageFor('土', '辰')).toBe('墓');
+    expect(twelveStageFor('火', '戌')).toBe('墓');
+    expect(twelveStageFor('金', '寅')).toBe('绝');
+    expect(twelveStageFor('木', '申')).toBe('绝');
+    expect(twelveStageFor('水', '巳')).toBe('绝');
+    expect(twelveStageFor('土', '巳')).toBe('绝');
+    expect(twelveStageFor('火', '亥')).toBe('绝');
+  });
+
   it('乾为天, 甲日子时: produces a fully-decorated chart with no warnings', () => {
     // 6 阳爻 (raw 7 each, static). 乾/乾 → 乾为天 → 乾宫, 世6应3.
     // 甲日 → 青龙 at line 1, 朱雀 at line 2, ..., 玄武 at line 6.
@@ -250,6 +269,10 @@ describe('assembleChart — full first-step wiring', () => {
     // 旬空: 甲日 → 戌亥. Line 6 is 戌 → 旬空. Others not.
     expect(r.lines[5]!.void).toBe(true);
     expect(r.lines.slice(0, 5).map((l) => l.void)).toEqual([false, false, false, false, false]);
+
+    // 十二长生：日辰子，按各爻五行取局；这是辅助状态，不进入 warnings。
+    expect(r.lines.map((l) => l.twelveStage?.byDay)).toEqual(['帝旺', '沐浴', '帝旺', '胎', '死', '帝旺']);
+    expect(r.lines.every((l) => l.twelveStage?.interpretationLevel === '辅助状态')).toBe(true);
   });
 
   it('a moving-line chart: 9 at line 1 produces 乾→姤 (changed)', () => {
@@ -261,6 +284,7 @@ describe('assembleChart — full first-step wiring', () => {
     expect(r.movingLines).toEqual([1]);
     expect(r.originalHexagram.name).toBe('乾');
     expect(r.changedHexagram.name).toBe('姤');
+    expect(r.lines[0]!.twelveStage?.byChangedBranch).toBeDefined();
   });
 
   it('adds 飞神/伏神 to the chart when a 六亲 is missing', () => {
@@ -300,6 +324,7 @@ describe('assembleChart — full first-step wiring', () => {
     expect(brief.asMarkdown).toContain('## 飞神伏神');
     expect(brief.asMarkdown).toContain('伏神 妻财甲寅(木)');
     expect(brief.asMarkdown).toContain('飞神 子孙辛亥(水)');
+    expect(brief.asMarkdown).toContain('## 十二长生使用边界');
   });
 
   it('produces a non-empty chart even with no dayStem (auto-derives from "now")', () => {

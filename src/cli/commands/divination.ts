@@ -793,7 +793,9 @@ export function renderLineDetails(data: any): void {
       l.isYing ? chalk.magenta.bold('应') : '',
     ].filter(Boolean).join('/');
     const marker = shiYing ? ` ${shiYing}` : '';
-    const original = `${formatStemBranchElement(l.stem, l.branch, l.element)} ${l.sixRelative} 临${l.sixGod}${voidMark}${movingMark}${marker}`;
+    const stage = formatTwelveStage(l);
+    const stageMark = stage ? ` [十二长生: ${stage}]` : '';
+    const original = `${formatStemBranchElement(l.stem, l.branch, l.element)} ${l.sixRelative} 临${l.sixGod}${voidMark}${stageMark}${movingMark}${marker}`;
     const hidden = formatHiddenGods(l);
     if (hasMoving) {
       const changed = l.changedSixRelative
@@ -804,6 +806,14 @@ export function renderLineDetails(data: any): void {
       console.log(chalk.gray(`    ${l.position}: ${original}${hidden ? `  |  伏: ${hidden}` : ''}`));
     }
   }
+}
+
+function formatTwelveStage(line: any): string {
+  const stage = line?.twelveStage || {};
+  return [
+    stage.byDay ? `日辰${stage.byDay}` : '',
+    stage.byChangedBranch ? `动化${stage.byChangedBranch}` : '',
+  ].filter(Boolean).join(' / ');
 }
 
 function formatHiddenGods(line: any): string {

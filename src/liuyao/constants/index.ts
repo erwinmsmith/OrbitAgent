@@ -22,3 +22,4 @@ export * from './stemsBranches60';
 export * from './xunkong';
 export * from './calendar';
 export * from './strength';
+export * from './twelveStages';

@@ -18,6 +18,7 @@ export { calendarSkill } from './skills/calendarSkill';
 export { branchRelationSkill } from './skills/branchRelationSkill';
 export { voidSkill } from './skills/voidSkill';
 export { strengthSkill } from './skills/strengthSkill';
+export { twelveStageSkill } from './skills/twelveStageSkill';
 export { yongshenSkill } from './skills/yongshenSkill';
 export { transformationSkill } from './skills/transformationSkill';
 export { fushenSkill } from './skills/fushenSkill';

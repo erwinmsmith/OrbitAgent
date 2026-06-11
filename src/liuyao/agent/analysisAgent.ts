@@ -80,7 +80,7 @@ const STEP_UNDERSTAND_SYSTEM = `你是六爻分析 Agent 的"理解阶段"。
 - RAG 查询必须是六爻知识库里可能存在的概念，例如：
   "妻财持世 求财"、"回头生克"、"用神旺衰"、"动化进退"、"六爻 事业"、
   "六爻 感情"、"六爻 考试"、"六爻 失物"、"六爻 出行"、"六爻 合同"、
-  "六爻 健康"、"伏神"、"飞神"、"世爻 应爻"、"卦宫五行"、"六神"等。
+  "六爻 健康"、"伏神"、"飞神"、"十二长生 生旺墓绝"、"世爻 应爻"、"卦宫五行"、"六神"等。
 - 不需要查的内容不要查；查询要精炼，2-4 个最佳。
 
 返回严格的 JSON（不要包裹在 markdown 代码块中）：
@@ -99,7 +99,7 @@ const STEP_UNDERSTAND_THINKING_SYSTEM = `你是六爻分析 Agent 的"理解阶�
 - 角度之间要正交 / 互补，不能重复。例如：
   角度 A "用神与旺衰" 看核心用神的强弱；
   角度 B "世应与动变" 看求占者与所问之物的关系 + 动爻的走向；
-  角度 C "时间与月令" 看排盘时间对用神 / 世爻的生克影响；
+  角度 C "时间与月令" 看排盘时间对用神 / 世爻的生克影响，包括日辰十二长生但不机械套月建十二神；
   角度 D "古断参考" 找知识库里类似卦例的判辞做类比；
   角度 E "格局与神煞" 看伏神 / 飞神 / 三合 / 六合 等格局。
 - 角度数：返回 3-5 个，不要太多（成本高），也不要太少（覆盖不全）。
@@ -107,7 +107,7 @@ const STEP_UNDERSTAND_THINKING_SYSTEM = `你是六爻分析 Agent 的"理解阶�
   不要用通用查询。查询举例：
   角度 "用神与旺衰" → ["用神旺衰 月令生克", "用神 空破 静卦", "妻财 持世 应期"]
   角度 "世应与动变" → ["世爻 应爻 生克", "动爻 化出 回头生", "世空 动化"]
-  角度 "时间与月令" → ["月令 日辰 旺衰", "起卦时间 卦气", "节气 卦运"]
+  角度 "时间与月令" → ["月令 日辰 旺衰", "十二长生 生旺墓绝", "起卦时间 卦气"]
   角度 "古断参考"   → ["增删卜易 类似卦例", "黄金策 歌诀", "实例应用 类似案例"]
   角度 "格局与神煞" → ["伏神 飞神", "三合 六合", "六神 螣蛇 白虎"]
 
@@ -433,6 +433,7 @@ export async function runAnalysisAgent(
     if (brief.originalHexagram.name) autoQueries.push(brief.originalHexagram.name);
     if (brief.questionType) autoQueries.push(`六爻 ${brief.questionType}`);
     for (const ys of parsedUnderstand.focusYongshen) autoQueries.push(ys);
+    if (brief.lines.some((l) => l.twelveStage)) autoQueries.push('十二长生 生旺墓绝');
     allQueries = Array.from(new Set([...parsedUnderstand.ragQueries, ...autoQueries]))
       .map((q) => q.trim())
       .filter(Boolean);
@@ -516,6 +517,7 @@ export async function runAnalysisAgent(
       if (brief.originalHexagram.name) autoQueries.push(brief.originalHexagram.name);
       if (brief.questionType) autoQueries.push(`六爻 ${brief.questionType}`);
       for (const ys of parsedUnderstand.focusYongshen) autoQueries.push(ys);
+      if (brief.lines.some((l) => l.twelveStage)) autoQueries.push('十二长生 生旺墓绝');
       allQueries = Array.from(new Set([...parsedUnderstand.ragQueries, ...autoQueries]))
         .map((q) => q.trim()).filter(Boolean);
       if (allQueries.length > 0) {
@@ -827,8 +829,8 @@ const DEFAULT_ANGLES: PlannedAngle[] = [
   },
   {
     name: '时间与月令',
-    perspective: '排盘时间（年/月/日/时四柱 + 节气）对用神 / 世爻的生克影响',
-    ragQueries: ['月令 日辰 旺衰', '起卦时间 节气', '卦气 进退'],
+    perspective: '排盘时间（年/月/日/时四柱 + 节气）对用神 / 世爻的生克影响；十二长生只作日辰和动化辅助状态',
+    ragQueries: ['月令 日辰 旺衰', '十二长生 生旺墓绝', '旬空 月破'],
   },
   {
     name: '古断参考',

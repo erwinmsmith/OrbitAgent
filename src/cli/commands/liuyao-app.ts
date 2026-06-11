@@ -864,9 +864,17 @@ function buildFullChartLines(data: any): string[] {
   ];
   const lines = Array.isArray(chart.lines) ? chart.lines : [];
   for (const l of lines) {
-    rows.push(`${l.position}  ${l.stem || ''}${l.branch || ''} ${l.element || ''}  ${l.sixRelative || ''}  ${l.sixGod || ''}${l.isShi ? '  世' : ''}${l.isYing ? '  应' : ''}${l.void ? '  旬空' : ''}${l.moving ? `  动→${l.changedStem || ''}${l.changedBranch || ''} ${l.changedSixRelative || ''}` : ''}${formatHiddenGods(l) ? `  伏：${formatHiddenGods(l)}` : ''}`);
+    rows.push(`${l.position}  ${l.stem || ''}${l.branch || ''} ${l.element || ''}  ${l.sixRelative || ''}  ${l.sixGod || ''}${l.isShi ? '  世' : ''}${l.isYing ? '  应' : ''}${l.void ? '  旬空' : ''}${l.moving ? `  动→${l.changedStem || ''}${l.changedBranch || ''} ${l.changedSixRelative || ''}` : ''}${formatTwelveStage(l) ? `  十二长生：${formatTwelveStage(l)}` : ''}${formatHiddenGods(l) ? `  伏：${formatHiddenGods(l)}` : ''}`);
   }
   return rows;
+}
+
+function formatTwelveStage(line: any): string {
+  const stage = line?.twelveStage || {};
+  return [
+    stage.byDay ? `日辰${stage.byDay}` : '',
+    stage.byChangedBranch ? `动化${stage.byChangedBranch}` : '',
+  ].filter(Boolean).join(' / ');
 }
 
 function formatHiddenGods(line: any): string {

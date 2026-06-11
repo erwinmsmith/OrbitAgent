@@ -19,11 +19,12 @@ import { yongshenSkill } from './yongshenSkill';
 import { strengthSkill } from './strengthSkill';
 import { calendarSkill } from './calendarSkill';
 import { fushenSkill } from './fushenSkill';
+import { twelveStageSkill } from './twelveStageSkill';
 import type {
   CastSkillOutput, HexagramSkillOutputT, PalaceSkillOutput, NaJiaSkillOutput,
   SixRelativeSkillOutput, SixGodSkillOutput, VoidSkillOutput,
   BranchRelationSkillOutput, TransformationSkillOutput, YongshenSkillOutput,
-  StrengthSkillOutput, CalendarSkillOutput, FuShenSkillOutput,
+  StrengthSkillOutput, CalendarSkillOutput, FuShenSkillOutput, TwelveStageSkillOutput,
 } from '../types/skill';
 import type { ChartResult, ChartLine, HexagramMeta } from '../types/chart';
 import type { QuestionType, EarthlyBranch, HeavenlyStem, LinePosition, WuXing, SixRelative, SixGod, YinYangBit } from '../types/basic';
@@ -260,6 +261,20 @@ export function assembleChart(input: AssembleInput): ChartResult {
       }
     } else {
       warnings.push(`fushenSkill: no pure palace hexagram found for ${hex.originalHexagram.palace}宫`);
+    }
+  }
+
+  // Step 9.85 — 十二长生. This is deterministic pre-interpretation
+  // material. We annotate 日辰 and moving-line changed branches only;
+  // 月建 is intentionally left to strength/月破、生克 logic.
+  if (input.dayBranch) {
+    const twelveStage: TwelveStageSkillOutput | null = safe(() => twelveStageSkill({
+      lines,
+      dayBranch: input.dayBranch,
+    }), 'twelveStageSkill', warnings);
+    for (const item of twelveStage?.lineStages ?? []) {
+      const line = lines[item.position - 1];
+      if (line) line.twelveStage = item;
     }
   }
 
