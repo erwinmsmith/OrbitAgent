@@ -65,6 +65,23 @@ import {
 import { getLLMManager } from '../../core/llm/LLMFactory';
 import { logger } from '../../utils/logger';
 import { withUnintelligibleInputGuard } from '../../core/prompts/runtimeGuards';
+import { YONGSHEN_CORE_RULES, YONGSHEN_RULES } from '../constants/yongshen';
+
+const QUESTION_TYPE_PROMPT = YONGSHEN_RULES
+  .map((rule) => `- ${rule.type}：主看${rule.primary.join('、')}；辅看${rule.auxiliary.join('、') || '无'}；关键词：${rule.keywords.join('、')}`)
+  .join('\n');
+
+const YONGSHEN_CORE_PROMPT = Object.entries(YONGSHEN_CORE_RULES)
+  .map(([name, rule]) => `- ${name}：${rule}`)
+  .join('\n');
+
+const VOID_RULE_PROMPT = [
+  '空亡判断边界：',
+  '- 空亡不是自动等于无效，必须结合用神身份、旺衰、动静、月日生克、冲合填实、动化、飞神伏神判断。',
+  '- 用神空而旺、发动、逢日月冲实或待出空，常表示暂未落实、时机未到；不是直接否定。',
+  '- 用神衰弱又空破，才偏向力量不足或难成。',
+  '- 化出之支空亡时，重点判断化出结果暂悬/待填实，不要把本爻原有力量直接抹掉。',
+].join('\n');
 
 const STEP_UNDERSTAND_SYSTEM = `你是六爻分析 Agent 的"理解阶段"。
 你的输入是已经排好的 ChartBrief（六爻结构化信息），以及用户的原始问题。
@@ -74,6 +91,14 @@ const STEP_UNDERSTAND_SYSTEM = `你是六爻分析 Agent 的"理解阶段"。
 3. 指出对回答用户问题最关键的信息（用神、五行、旺衰、十二长生、动爻化出、旬空等）。
 4. 决定需要从六爻知识库里召回哪些信息来支撑你的理解 — 给出 2-4 个 RAG 查询。
 5. 写一段简短的"中间理解"（200-400 字），说明你打算从哪些角度分析。
+
+用神核心规则：
+${YONGSHEN_CORE_PROMPT}
+
+可用问事类别：
+${QUESTION_TYPE_PROMPT}
+
+${VOID_RULE_PROMPT}
 
 严格规则：
 - 不能重新排盘或修改 ChartBrief 中的任何字段。
@@ -87,8 +112,8 @@ const STEP_UNDERSTAND_SYSTEM = `你是六爻分析 Agent 的"理解阶段"。
 
 返回严格的 JSON（不要包裹在 markdown 代码块中）：
 {
-  "refinedQuestionType": "求财" | "求事业" | "求感情" | "求考试" | "求合同" | "求健康" | "求失物" | "求出行" | "求合作" | "求官司" | "求宠物" | "其他",
-  "focusYongshen": ["妻财", "官鬼", ...],   // 你认为对回答用户问题最关键的一个或多个六亲
+  "refinedQuestionType": "必须从 ChartBrief 问题类型或上方可用问事类别中选一个",
+  "focusYongshen": ["妻财", "官鬼", "世爻", "应爻"],   // 你认为对回答用户问题最关键的一个或多个六亲/世应焦点
   "ragQueries": ["查询1", "查询2", "查询3"],
   "intermediateUnderstanding": "200-400 字的中间理解，指出关键爻位、动爻化出、用神、需要注意的冲合/旬空/动变等。"
 }`;
@@ -113,10 +138,18 @@ const STEP_UNDERSTAND_THINKING_SYSTEM = `你是六爻分析 Agent 的"理解阶�
   角度 "古断参考"   → ["增删卜易 类似卦例", "黄金策 歌诀", "实例应用 类似案例"]
   角度 "格局与神煞" → ["伏神 飞神", "三合 六合", "六神 螣蛇 白虎"]
 
+用神核心规则：
+${YONGSHEN_CORE_PROMPT}
+
+可用问事类别：
+${QUESTION_TYPE_PROMPT}
+
+${VOID_RULE_PROMPT}
+
 返回严格的 JSON（不要包裹在 markdown 代码块中）：
 {
-  "refinedQuestionType": "求财" | "求事业" | "求感情" | ...,
-  "focusYongshen": ["妻财", "官鬼", ...],
+  "refinedQuestionType": "必须从 ChartBrief 问题类型或上方可用问事类别中选一个",
+  "focusYongshen": ["妻财", "官鬼", "世爻", "应爻"],
   "ragQueries": ["总览查询1", "总览查询2"],   // 顶层全局查询，会跟各角度查询合并
   "intermediateUnderstanding": "200-400 字的中间理解",
   "angles": [
@@ -154,6 +187,7 @@ const STEP_ANGLE_SYSTEM = `你是六爻分析 Agent 的"单角度分析"阶段�
    没有引用就**不要**编造 [cite: ...] 标签。
 3. 角度要专一：只看 perspective 指定的方向，不要越界做综合判断。
 4. 最后用一句话总结本角度的核心发现，供综合分析阶段合并。
+5. ${VOID_RULE_PROMPT}
 
 输出 Markdown，不要包裹在 JSON 里。`;
 
@@ -169,6 +203,7 @@ const STEP_SYNTHESIZE_THINKING_SYSTEM = `你是六爻分析 Agent 的"综合分�
 要求：
 1. 严格基于 ChartBrief 中的结构化信息 — 不能改写本卦/变卦/六亲/六神/世应/纳甲/旬空/旺衰/十二长生/飞神伏神/用神候选。
 2. 必须把 ChartBrief 的旺衰标签、十二长生（日辰与动化）、月破/日破/旬空、飞神伏神、动爻化出纳入判断。不能只引用卦名、卦辞或本卦/变卦就直接下结论。
+   ${VOID_RULE_PROMPT}
 3. **必须整合多个角度的发现**。如果角度 A 说"用神旺"，角度 B 说"世爻空"，
    你需要把两个事实同时呈现并讨论它们的关系，而不是只挑一个。
 4. 引用召回片段时，**必须**保留 [cite: source] 标签，例如：
@@ -199,6 +234,7 @@ const STEP_SYNTHESIZE_SYSTEM = `你是六爻分析 Agent 的"综合分析阶段"
 要求：
 1. 严格基于 ChartBrief 中的结构化信息 — 不能改写本卦/变卦/六亲/六神/世应/纳甲/旬空/旺衰/十二长生/飞神伏神/用神候选。
 2. 必须把 ChartBrief 的旺衰标签、十二长生（日辰与动化）、月破/日破/旬空、飞神伏神、动爻化出纳入判断。不能只引用卦名、卦辞或本卦/变卦就直接下结论。
+   ${VOID_RULE_PROMPT}
 3. 引用召回片段时，**必须**保留 [cite: source] 标签，例如：
    "妻财持世，求财可得 [cite: docs/base_knowledge/六爻用神.md]"。
    没有引用就**不要**编造 [cite: ...] 标签。
@@ -408,7 +444,7 @@ export async function runAnalysisAgent(
     };
   }
   const understandMs = Date.now() - t1;
-  const parsedUnderstand = parseUnderstandResponse(understandResp.content || '');
+  const parsedUnderstand = completeUnderstanding(parseUnderstandResponse(understandResp.content || ''), brief);
   pipeline.push({
     stage: 'understand',
     durationMs: understandMs,
@@ -838,6 +874,30 @@ function parseUnderstandResponse(raw: string): ParsedUnderstand {
     logger.warn(`parseUnderstandResponse: JSON parse failed (${e?.message ?? e}); raw=${raw.slice(0, 200)}`);
     return empty;
   }
+}
+
+function completeUnderstanding(parsed: ParsedUnderstand, brief: ChartBrief): ParsedUnderstand {
+  const rule = YONGSHEN_RULES.find((item) => item.type === parsed.refinedQuestionType) ??
+    YONGSHEN_RULES.find((item) => item.type === brief.questionType) ??
+    YONGSHEN_RULES[YONGSHEN_RULES.length - 1]!;
+  const focusYongshen = parsed.focusYongshen.length > 0
+    ? parsed.focusYongshen
+    : rule.primary;
+  const ragQueries = parsed.ragQueries.length > 0
+    ? parsed.ragQueries
+    : [
+        `六爻 ${rule.type}`,
+        ...rule.primary.map((focus) => `${focus} 用神`),
+        '旬空 空亡 用神',
+      ];
+  return {
+    ...parsed,
+    refinedQuestionType: rule.type,
+    focusYongshen,
+    ragQueries,
+    intermediateUnderstanding: parsed.intermediateUnderstanding ||
+      `按「${rule.type}」取用：主看${rule.primary.join('、')}，辅看${rule.auxiliary.join('、') || '无'}。${rule.description}`,
+  };
 }
 
 /**

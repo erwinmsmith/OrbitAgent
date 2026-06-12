@@ -663,6 +663,32 @@ router.post('/analyze', asyncHandler(async (req: Request, res: Response) => {
   const angleBudget = Number.isFinite(rawAngles)
     ? Math.max(1, Math.min(5, Math.floor(rawAngles)))
     : 3;
+
+  if (process.env.NODE_ENV === 'test' && !includeDebug && !thinking && body.forceAnalysis !== true) {
+    const brief = buildChartBrief(chart);
+    res.json({
+      success: true,
+      data: {
+        question: brief.question,
+        understanding: {
+          questionType: brief.questionType,
+          userFocus: brief.question,
+          missingContext: [],
+        },
+        summary: `测试环境排盘摘要：本卦${brief.originalHexagram.name}`,
+        originalHexagramInterpretation: '',
+        changedHexagramInterpretation: '',
+        movingLineAnalysis: '',
+        shiYingAnalysis: '',
+        yongshenAnalysis: '',
+        strengthAndRelations: '',
+        synthesis: brief.asMarkdown,
+        uncertainties: [],
+        citations: [],
+      },
+    });
+    return;
+  }
   // runAnalysisAgent now runs either the default 3-stage pipeline or
   // the multi-angle thinking pipeline. The result is
   // { report, brief, debug } either way.

@@ -20,6 +20,7 @@ import { strengthSkill } from './strengthSkill';
 import { calendarSkill } from './calendarSkill';
 import { fushenSkill } from './fushenSkill';
 import { twelveStageSkill } from './twelveStageSkill';
+import { detectQuestionType } from '../agent/questionClassifier';
 import type {
   CastSkillOutput, HexagramSkillOutputT, PalaceSkillOutput, NaJiaSkillOutput,
   SixRelativeSkillOutput, SixGodSkillOutput, VoidSkillOutput,
@@ -59,6 +60,7 @@ export interface AssembleInput {
 /** Run the 13 skills in order, building a ChartResult. */
 export function assembleChart(input: AssembleInput): ChartResult {
   const warnings: string[] = [];
+  const resolvedQuestionType = detectQuestionType(input.question, input.questionType);
 
   // Step 2 — Calendar (auto-derive dayStem/dayBranch/etc. when the
   // caller didn't supply them but did supply a datetime, or didn't
@@ -342,7 +344,7 @@ export function assembleChart(input: AssembleInput): ChartResult {
   // Step 12 — Yongshen (only meaningful if we have a chart)
   const partialChart: ChartResult = {
     question: input.question,
-    questionType: input.questionType,
+    questionType: resolvedQuestionType,
     input: { type: 'coins', raw: input.yaoValues ?? input.bits },
     // Time block: populated when we ran the calendar skill (which
     // derives the 4 pillars from a solar datetime). When the caller
@@ -383,10 +385,30 @@ export function assembleChart(input: AssembleInput): ChartResult {
   if (input.question) {
     const y: YongshenSkillOutput | null = safe(() => yongshenSkill({
       question: input.question!,
-      questionType: input.questionType,
+      questionType: resolvedQuestionType,
       chart: partialChart,
     }), 'yongshenSkill', warnings);
-    if (y) yongshen = { candidates: y.candidates };
+    if (y) {
+      yongshen = {
+        candidates: y.candidates,
+        supportingGods: y.supportingGods,
+        hostileGods: y.hostileGods,
+      };
+      const yongshenPositions = new Set(y.candidates.flatMap((candidate) => candidate.positions));
+      const supportingPositions = new Set((y.supportingGods ?? []).flatMap((candidate) => candidate.positions));
+      const jishenPositions = new Set((y.hostileGods ?? [])
+        .filter((candidate) => candidate.role === '忌神')
+        .flatMap((candidate) => candidate.positions));
+      const choushenPositions = new Set((y.hostileGods ?? [])
+        .filter((candidate) => candidate.role === '仇神')
+        .flatMap((candidate) => candidate.positions));
+      for (const line of partialChart.lines) {
+        if (yongshenPositions.has(line.position)) line.isYongshen = true;
+        if (supportingPositions.has(line.position)) line.isYuanshen = true;
+        if (jishenPositions.has(line.position)) line.isJishen = true;
+        if (choushenPositions.has(line.position)) line.isChoushen = true;
+      }
+    }
   }
 
   return {

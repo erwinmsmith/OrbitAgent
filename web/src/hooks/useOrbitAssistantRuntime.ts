@@ -16,6 +16,8 @@ interface UseOrbitRuntimeOptions {
   token: string
   sessionId: string
   isSendDisabled?: boolean
+  thinking?: boolean
+  angles?: number
   onSessionResolved: (sessionId: string) => void
   onConversationChanged: () => void
 }
@@ -57,6 +59,8 @@ export function useOrbitAssistantRuntime({
   token,
   sessionId,
   isSendDisabled,
+  thinking,
+  angles,
   onSessionResolved,
   onConversationChanged,
 }: UseOrbitRuntimeOptions) {
@@ -122,6 +126,8 @@ export function useOrbitAssistantRuntime({
             sessionId: requestSessionId,
             message: text,
             agentId: 'default',
+            thinking,
+            angles,
           },
           controller.signal,
         )) {
@@ -193,7 +199,7 @@ export function useOrbitAssistantRuntime({
         })
       }
     },
-    [onConversationChanged, onSessionResolved, sessionId, setSessionMessages, token],
+    [angles, onConversationChanged, onSessionResolved, sessionId, setSessionMessages, thinking, token],
   )
 
   const messages = messagesBySession[sessionId] ?? EMPTY_MESSAGES

@@ -16,7 +16,7 @@ import { logger } from '../../../utils/logger';
  * to stay neutral across providers — DeepSeek's on-the-wire key
  * is `reasoning_content`.)
  */
-function toOpenAIMessages(messages: LLMMessage[]): any[] {
+export function toOpenAIMessages(messages: LLMMessage[]): any[] {
   return messages.map((msg) => {
     if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
       const out: any = {
@@ -32,6 +32,14 @@ function toOpenAIMessages(messages: LLMMessage[]): any[] {
       // from the previous assistant turn. The chat loop stores it
       // under providerExtras; for non-reasoning turns this is just
       // undefined and the field is omitted.
+      const rc = msg.providerExtras?.reasoningContent;
+      if (typeof rc === 'string' && rc.length > 0) {
+        out.reasoning_content = rc;
+      }
+      return out;
+    }
+    if (msg.role === 'assistant') {
+      const out: any = { role: 'assistant', content: msg.content };
       const rc = msg.providerExtras?.reasoningContent;
       if (typeof rc === 'string' && rc.length > 0) {
         out.reasoning_content = rc;

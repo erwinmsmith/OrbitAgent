@@ -13,6 +13,7 @@
  * caller can inspect it on its own.
  */
 import type { ChartResult, ChartLine, HexagramMeta } from '../types/chart';
+import { YONGSHEN_CORE_RULES, yongshenRuleFor } from '../constants/yongshen';
 
 const TRIGRAM_NAME: Record<string, string> = {
   '乾': '乾天', '坤': '坤地', '震': '震雷', '巽': '巽风',
@@ -32,6 +33,9 @@ export interface BriefLine {
   isYing: boolean;
   void: boolean;
   isYongshen: boolean;
+  isYuanshen: boolean;
+  isJishen: boolean;
+  isChoushen: boolean;
   changedBranch?: string;
   changedElement?: string;
   hiddenGods: Array<{
@@ -87,6 +91,11 @@ export interface ChartBrief {
   movingLines: number[];
   lines: BriefLine[];
   yongshen: {
+    rule: {
+      primary: string[];
+      auxiliary: string[];
+      description: string;
+    };
     candidates: Array<{
       relative: string;
       positions: number[];
@@ -139,6 +148,9 @@ function formatLine(l: ChartLine): BriefLine {
     isYing: l.isYing,
     void: !!l.void,
     isYongshen: !!l.isYongshen,
+    isYuanshen: !!l.isYuanshen,
+    isJishen: !!l.isJishen,
+    isChoushen: !!l.isChoushen,
     changedBranch: l.changedBranch,
     changedElement: l.changedElement,
     hiddenGods: (l.hiddenGods ?? []).map((h) => ({
@@ -176,6 +188,7 @@ export function buildChartBrief(chart: ChartResult): ChartBrief {
 
   const yongshen = chart.yongshen ?? { candidates: [], supportingGods: [], hostileGods: [] };
   const relations = chart.relations ?? { lineRelations: [], dayRelations: [] };
+  const yongshenRule = yongshenRuleFor(chart.questionType);
 
   const brief: ChartBrief = {
     question: chart.question ?? '',
@@ -202,6 +215,11 @@ export function buildChartBrief(chart: ChartResult): ChartBrief {
     movingLines: chart.movingLines ?? [],
     lines: lines.map(formatLine),
     yongshen: {
+      rule: {
+        primary: yongshenRule.primary,
+        auxiliary: yongshenRule.auxiliary,
+        description: yongshenRule.description,
+      },
       candidates: (yongshen.candidates ?? []).map((c) => ({
         relative: c.relative,
         positions: c.positions,
@@ -296,6 +314,9 @@ function renderBriefMarkdown(b: ChartBrief): string {
     if (l.isYing) tags.push('应');
     if (l.void) tags.push('空');
     if (l.isYongshen) tags.push('用');
+    if (l.isYuanshen) tags.push('元');
+    if (l.isJishen) tags.push('忌');
+    if (l.isChoushen) tags.push('仇');
     const tagStr = tags.length ? ` 【${tags.join('/')}】` : '';
     const moveStr = l.moving ? ` 动→${l.changedBranch ?? '?'}(${l.changedElement ?? '?'})` : '';
     const hiddenStr = l.hiddenGods.length
@@ -329,8 +350,9 @@ function renderBriefMarkdown(b: ChartBrief): string {
 
   if (b.yongshen.candidates.length) {
     out.push('\n## 用神候选');
+    out.push(`- 取法：主看 ${b.yongshen.rule.primary.join('、') || '未定'}；辅看 ${b.yongshen.rule.auxiliary.join('、') || '无'}。${b.yongshen.rule.description}`);
     for (const c of b.yongshen.candidates) {
-      out.push(`- ${c.relative}（置信度：${c.confidence}）— 出现在第${c.positions.join('、')}爻；${c.reason}`);
+      out.push(`- ${c.relative}（置信度：${c.confidence}）— ${c.positions.length ? `出现在第${c.positions.join('、')}爻` : '本卦明现位置不足，需结合伏神/世应/日月再看'}；${c.reason}`);
     }
     if (b.yongshen.supportingGods.length) {
       out.push(`- 元神：${b.yongshen.supportingGods.map((g) => `${g.relative}(第${g.positions.join('、')}爻)`).join('、')}`);
@@ -341,6 +363,19 @@ function renderBriefMarkdown(b: ChartBrief): string {
   } else {
     out.push('\n## 用神候选');
     out.push('- 程序未给出用神候选（请根据问题类型与卦象自行判断）');
+  }
+
+  out.push('\n## 用神核心规则');
+  for (const [name, rule] of Object.entries(YONGSHEN_CORE_RULES)) {
+    out.push(`- ${name}：${rule}`);
+  }
+
+  if (b.time.xunkong?.length) {
+    out.push('\n## 空亡判断边界');
+    out.push(`- 本次旬空为：${b.time.xunkong.join('、')}。爻支落入这两个地支时，排盘已标记为“空”。`);
+    out.push('- 空亡不是自动等于无效：需结合用神身份、旺衰、动静、月日生克、冲合填实、动化回头生克、飞神伏神一并判断。');
+    out.push('- 用神空而旺、发动、逢日月冲实或待出空，可以表示暂未落实、时机未到；用神衰弱又空破，才偏向力量不足。');
+    out.push('- 化出之支空亡时，重点判断“化出结果暂悬/待填实”，不要把本爻原有力量直接抹掉。');
   }
 
   if (b.relations.lineRelations.length || b.relations.dayRelations.length) {

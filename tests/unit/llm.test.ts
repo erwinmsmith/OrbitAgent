@@ -1,4 +1,5 @@
 import { ClaudeAdapter } from '../../src/core/llm/adapters/ClaudeAdapter';
+import { toOpenAIMessages } from '../../src/core/llm/adapters/DeepSeekAdapter';
 import { OpenAIAdapter } from '../../src/core/llm/adapters/OpenAIAdapter';
 
 describe('LLM Adapters', () => {
@@ -67,6 +68,41 @@ describe('LLM Adapters', () => {
       const model = await adapter.getModel('gpt-4o');
       expect(model).toBeDefined();
       expect(model?.id).toBe('gpt-4o');
+    });
+  });
+
+  describe('DeepSeekAdapter message conversion', () => {
+    it('passes reasoning_content back on regular assistant messages', () => {
+      const messages = toOpenAIMessages([
+        {
+          role: 'assistant',
+          content: '上一轮答案',
+          providerExtras: { reasoningContent: 'internal reasoning token' },
+        },
+      ]);
+
+      expect(messages[0]).toMatchObject({
+        role: 'assistant',
+        content: '上一轮答案',
+        reasoning_content: 'internal reasoning token',
+      });
+    });
+
+    it('passes reasoning_content back on assistant tool-call messages', () => {
+      const messages = toOpenAIMessages([
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id: 'call_1', name: 'divination', input: { action: 'analyze' } }],
+          providerExtras: { reasoningContent: 'tool reasoning token' },
+        },
+      ]);
+
+      expect(messages[0]).toMatchObject({
+        role: 'assistant',
+        content: null,
+        reasoning_content: 'tool reasoning token',
+      });
     });
   });
 });

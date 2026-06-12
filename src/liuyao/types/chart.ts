@@ -10,6 +10,7 @@ import type {
   QuestionType, BranchRelationType,
 } from './basic';
 import type { FuShenItem, TwelveStageLine } from './skill';
+import type { YongshenFocus } from '../constants/yongshen';
 
 /** A single line in a hexagram chart, with all its decorations. */
 export interface ChartLine {
@@ -82,7 +83,7 @@ export interface RelationTag {
 
 /** A candidate yongshen (用神) the engine proposes. */
 export interface YongshenCandidate {
-  relative: SixRelative;
+  relative: YongshenFocus;
   positions: LinePosition[];
   reason: string;
   confidence: 'low' | 'medium' | 'high';

@@ -89,6 +89,7 @@ export type DivinationMethod = 'coins' | 'manual' | 'time' | 'numbers' | 'charac
 export interface DivinationAskBody {
   sessionId: string
   question: string
+  questionType?: string
   message: string
   timezone?: string
   datetime?: string
@@ -240,6 +241,8 @@ export async function* streamChat(
     sessionId: string
     message: string
     agentId?: string
+    thinking?: boolean
+    angles?: number
   },
   signal?: AbortSignal,
 ): AsyncGenerator<StreamEvent> {

@@ -7,6 +7,7 @@ import type {
   YaoValue, QuestionType, Trigram,
 } from './basic';
 import type { ChartLine, ChartResult, HexagramMeta, CastResult, HexagramSkillOutput } from './chart';
+import type { YongshenFocus } from '../constants/yongshen';
 
 // Re-export for ergonomic imports in the skills themselves.
 export type { ChartResult, CastResult, HexagramSkillOutput, ChartLine, HexagramMeta };
@@ -177,13 +178,15 @@ export interface YongshenSkillInput {
   chart: ChartResult;
 }
 export interface YongshenCandidateT {
-  relative: SixRelative;
+  relative: YongshenFocus;
   positions: LinePosition[];
   reason: string;
   confidence: 'low' | 'medium' | 'high';
 }
 export interface YongshenSkillOutput {
   candidates: YongshenCandidateT[];
+  supportingGods?: Array<{ relative: SixRelative; positions: LinePosition[]; role: '元神' }>;
+  hostileGods?: Array<{ relative: SixRelative; positions: LinePosition[]; role: '忌神' | '仇神' }>;
 }
 
 // ─── 5.12 Transformation Skill ────────────────────────────────────────

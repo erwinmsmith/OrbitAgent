@@ -75,11 +75,49 @@ const CASTING_PROGRESS: Record<Exclude<CastingStage, 'idle'>, CastingProgress> =
 }
 
 const METHODS: Array<{ id: DivinationMethod; label: string; hint: string }> = [
-  { id: 'coins', label: '自动摇卦', hint: '模拟三枚硬币摇六次' },
-  { id: 'manual', label: '手动六爻', hint: '逐爻选择三枚硬币阳面数' },
-  { id: 'time', label: '时间起卦', hint: '按当前时间取卦' },
-  { id: 'numbers', label: '数字起卦', hint: '分别填写上卦、下卦、动爻数' },
-  { id: 'character', label: '汉字起卦', hint: '输入 1 个汉字' },
+  { id: 'coins', label: '自动摇卦', hint: '系统模拟三枚硬币，从初爻到上爻摇六次，适合多数问题。' },
+  { id: 'manual', label: '手动六爻', hint: '你自己摇硬币，逐爻选择阳面个数；五角硬币花面为阳。' },
+  { id: 'time', label: '时间起卦', hint: '按当前时间换算上下卦与动爻，适合快速问事。' },
+  { id: 'numbers', label: '数字起卦', hint: '输入上卦数、下卦数、动爻数，系统按先天八卦数取卦。' },
+  { id: 'character', label: '汉字起卦', hint: '输入一个汉字，按笔画和时间取卦，适合以字触机。' },
+]
+
+const QUESTION_TYPE_OPTIONS = [
+  { value: '', label: '自动识别', hint: '由 Agent 根据问题关键词判断用神' },
+  { value: '求财收入', label: '求财收入', hint: '钱、收入、工资、副业、回款' },
+  { value: '投资交易', label: '投资交易', hint: '股票、基金、币、买卖、收益' },
+  { value: '生意订单', label: '生意订单', hint: '客户、订单、成交、合作、签单' },
+  { value: '工作事业', label: '工作事业', hint: '工作、岗位、offer、跳槽' },
+  { value: '升职考公', label: '升职考公', hint: '晋升、编制、公务员、职称' },
+  { value: '考试学习', label: '考试学习', hint: '考试、论文、成绩、录取' },
+  { value: '文书合同', label: '文书合同', hint: '合同、协议、证明、签证' },
+  { value: '房屋住所', label: '房屋住所', hint: '买房、租房、搬家、宿舍' },
+  { value: '车辆交通', label: '车辆交通', hint: '车、驾驶、交通、事故' },
+  { value: '感情男问女', label: '感情男问女', hint: '女朋友、女生、追女生、老婆' },
+  { value: '感情女问男', label: '感情女问男', hint: '男朋友、男生、追男生、老公' },
+  { value: '泛问关系', label: '泛问关系', hint: '对方怎么看、关系、和好' },
+  { value: '朋友同学', label: '朋友同学', hint: '朋友、同学、室友、同辈' },
+  { value: '合伙合作', label: '合伙合作', hint: '合伙人、团队、一起做项目' },
+  { value: '竞争对手', label: '竞争对手', hint: '竞争、同行、抢资源' },
+  { value: '宠物', label: '宠物', hint: '猫、狗、宠物、动物' },
+  { value: '子女', label: '子女', hint: '孩子、怀孕、备孕、生育' },
+  { value: '下属学生', label: '下属学生', hint: '下属、学生、员工表现' },
+  { value: '健康疾病', label: '健康疾病', hint: '身体、疾病、疼痛、健康' },
+  { value: '医药治疗', label: '医药治疗', hint: '药、治疗、医生、康复' },
+  { value: '官司纠纷', label: '官司纠纷', hint: '诉讼、报警、投诉、仲裁' },
+  { value: '风险灾祸', label: '风险灾祸', hint: '危险、出事、麻烦、事故' },
+  { value: '失物寻找', label: '失物寻找', hint: '手机、钥匙、钱包、找不到' },
+  { value: '证件丢失', label: '证件丢失', hint: '身份证、护照、合同、文件' },
+  { value: '出行旅行', label: '出行旅行', hint: '出门、旅行、远行、行程' },
+  { value: '消息回复', label: '消息回复', hint: '微信、邮件、回复、联系' },
+  { value: '项目产品', label: '项目产品', hint: '项目、产品、系统、代码' },
+  { value: 'AI Agent/软件上线', label: 'AI Agent/软件上线', hint: 'agent、上线、部署、产品发布' },
+  { value: '面试录用', label: '面试录用', hint: '面试、offer、录用、入职' },
+  { value: '领导老师', label: '领导老师', hint: '老师、导师、领导、评审' },
+  { value: '父母长辈', label: '父母长辈', hint: '父亲、母亲、长辈、老人' },
+  { value: '兄弟姐妹', label: '兄弟姐妹', hint: '兄弟、姐妹、同辈亲戚' },
+  { value: '名声口舌', label: '名声口舌', hint: '名声、舆论、吵架、被骂' },
+  { value: '玄学问事泛问', label: '泛问成败', hint: '成不成、结果如何、对我好吗' },
 ]
 
 const EMPTY_MANUAL_COIN_COUNTS: ManualCoinCounts = Array.from({ length: 6 }, () => null)
@@ -705,6 +743,7 @@ function DivinationWorkbench({
   method,
   question,
   methodInput,
+  questionType,
   manualCoinCounts,
   numberInputs,
   analysisMode,
@@ -717,6 +756,7 @@ function DivinationWorkbench({
   activePanel,
   onMethodChange,
   onQuestionChange,
+  onQuestionTypeChange,
   onMethodInputChange,
   onManualCoinCountChange,
   onNumberInputChange,
@@ -730,6 +770,7 @@ function DivinationWorkbench({
   method: DivinationMethod
   question: string
   methodInput: string
+  questionType: string
   manualCoinCounts: ManualCoinCounts
   numberInputs: string[]
   analysisMode: AnalysisMode
@@ -742,6 +783,7 @@ function DivinationWorkbench({
   activePanel: DetailPanel
   onMethodChange: (method: DivinationMethod) => void
   onQuestionChange: (question: string) => void
+  onQuestionTypeChange: (questionType: string) => void
   onMethodInputChange: (value: string) => void
   onManualCoinCountChange: (index: number, value: CoinYangCount) => void
   onNumberInputChange: (index: number, value: string) => void
@@ -801,6 +843,25 @@ function DivinationWorkbench({
             rows={3}
           />
         </label>
+        <details className="question-type-panel">
+          <summary>
+            <span>问事类别</span>
+            <strong>{QUESTION_TYPE_OPTIONS.find((item) => item.value === questionType)?.label ?? '自动识别'}</strong>
+          </summary>
+          <div className="question-type-grid" role="group" aria-label="问事类别">
+            {QUESTION_TYPE_OPTIONS.map((item) => (
+              <button
+                type="button"
+                key={item.value || 'auto'}
+                data-active={questionType === item.value ? 'true' : undefined}
+                onClick={() => onQuestionTypeChange(item.value)}
+              >
+                <strong>{item.label}</strong>
+                <small>{item.hint}</small>
+              </button>
+            ))}
+          </div>
+        </details>
         {method === 'manual' ? (
           <div className="manual-cast-panel" aria-label="手动六爻阳面选择">
             <div className="field-heading">
@@ -960,6 +1021,7 @@ function AuthedApp({
   const [historyError, setHistoryError] = useState('')
   const [method, setMethod] = useState<DivinationMethod>('coins')
   const [question, setQuestion] = useState('')
+  const [questionType, setQuestionType] = useState('')
   const [methodInput, setMethodInput] = useState('')
   const [manualCoinCounts, setManualCoinCounts] = useState<ManualCoinCounts>(() => [...EMPTY_MANUAL_COIN_COUNTS])
   const [numberInputs, setNumberInputs] = useState<string[]>(() => [...EMPTY_NUMBER_INPUTS])
@@ -1052,6 +1114,8 @@ function AuthedApp({
     token,
     sessionId,
     isSendDisabled: !activeConversationReady || activeWorkflowRunning,
+    thinking: analysisMode === 'deep',
+    angles,
     onSessionResolved: setSessionId,
     onConversationChanged: refreshConversations,
   })
@@ -1112,6 +1176,7 @@ function AuthedApp({
     setSessionId(nextSessionId)
     setSessionMessages(nextSessionId, [])
     setQuestion('')
+    setQuestionType('')
     setMethodInput('')
     setManualCoinCounts([...EMPTY_MANUAL_COIN_COUNTS])
     setNumberInputs([...EMPTY_NUMBER_INPUTS])
@@ -1179,6 +1244,7 @@ function AuthedApp({
       const data = await withAuthRetry((accessToken) => askDivination(accessToken, {
         sessionId: targetSessionId,
         question: trimmedQuestion,
+        ...(questionType ? { questionType } : {}),
         message: buildPersonaPrompt(personaMode, customPersonaPrompt),
         timezone: 'Asia/Shanghai',
         datetime: new Date().toISOString(),
@@ -1293,6 +1359,7 @@ function AuthedApp({
               <DivinationWorkbench
                 method={method}
                 question={question}
+                questionType={questionType}
                 methodInput={methodInput}
                 manualCoinCounts={manualCoinCounts}
                 numberInputs={numberInputs}
@@ -1312,6 +1379,7 @@ function AuthedApp({
                   setWorkflowError('')
                 }}
                 onQuestionChange={setQuestion}
+                onQuestionTypeChange={setQuestionType}
                 onMethodInputChange={setMethodInput}
                 onManualCoinCountChange={(index, value) => {
                   setManualCoinCounts((current) => current.map((item, i) => (i === index ? value : item)))
