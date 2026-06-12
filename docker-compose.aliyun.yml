@@ -32,6 +32,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
+      args:
+        NPM_REGISTRY: https://registry.npmmirror.com
     restart: unless-stopped
     env_file:
       - .env.production
@@ -62,6 +64,7 @@ services:
       dockerfile: Dockerfile.web
       args:
         VITE_ORBIT_API_BASE: /api/v1
+        NPM_REGISTRY: https://registry.npmmirror.com
     restart: unless-stopped
     depends_on:
       - api

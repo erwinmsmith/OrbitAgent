@@ -4,10 +4,11 @@ FROM node:20-bookworm-slim AS build
 WORKDIR /app/web
 
 ARG VITE_ORBIT_API_BASE=/api/v1
+ARG NPM_REGISTRY=https://registry.npmjs.org/
 ENV VITE_ORBIT_API_BASE=${VITE_ORBIT_API_BASE}
 
 COPY web/package.json web/package-lock.json ./
-RUN npm ci
+RUN npm ci --registry="${NPM_REGISTRY}"
 
 COPY web ./
 RUN npm run build
