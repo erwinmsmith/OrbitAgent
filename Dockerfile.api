@@ -4,7 +4,7 @@ FROM node:20-bookworm-slim AS deps
 WORKDIR /app
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 COPY package.json package-lock.json ./
-RUN npm ci --registry="${NPM_REGISTRY}"
+RUN npm ci --ignore-scripts --registry="${NPM_REGISTRY}"
 
 FROM deps AS build
 WORKDIR /app
@@ -12,6 +12,11 @@ COPY tsconfig.json config.yaml ./
 COPY src ./src
 COPY docs/base_knowledge ./docs/base_knowledge
 RUN npm run build
+
+FROM deps AS prod-deps
+WORKDIR /app
+RUN npm prune --omit=dev --ignore-scripts \
+  && npm cache clean --force
 
 FROM node:20-bookworm-slim AS runtime
 WORKDIR /app
@@ -25,9 +30,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
-COPY --from=deps /app/node_modules ./node_modules
-RUN npm prune --omit=dev --ignore-scripts \
-  && npm cache clean --force
+COPY --from=prod-deps /app/node_modules ./node_modules
 
 COPY --from=build /app/dist ./dist
 COPY config.yaml ./
