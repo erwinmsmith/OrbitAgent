@@ -35,7 +35,7 @@ COPY prompts ./prompts
 COPY docs/base_knowledge ./docs/base_knowledge
 
 RUN mkdir -p logs \
-  && chown -R node:node /app
+  && chown node:node logs
 
 USER node
 EXPOSE 3000
