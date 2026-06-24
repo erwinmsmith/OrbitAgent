@@ -1,6 +1,6 @@
 # OrbitAgent
 
-> 六爻纳甲排盘、知识库检索与 LLM 分析 Agent 后端。
+> 六爻纳甲排盘、知识库检索与 LLM 分析 Agent 后端（web / cli）。
 
 OrbitAgent 的目标不是让大模型自由“算卦”，而是把六爻业务拆成两层：
 
