@@ -2,6 +2,8 @@
 
 > 六爻纳甲排盘、知识库检索与 LLM 分析 Agent 后端（web / cli）。
 
+Standalone charting skill: [erwinmsmith/liuyao-charting-skill](https://github.com/erwinmsmith/liuyao-charting-skill). The same skill is mirrored in this repository at `skills/liuyao-charting/`.
+
 OrbitAgent 的目标不是让大模型自由“算卦”，而是把六爻业务拆成两层：
 
 - **程序层负责算准**：起卦输入、阴阳动静、本卦/变卦、八宫、世应、纳甲、六亲、六神、旬空、冲合、动化、用神候选等确定性内容都由规则函数和硬编码表生成。
@@ -96,6 +98,9 @@ prompts/system/
 docs/
   base_knowledge/                # 系统级六爻知识库语料
   liuyao/KNOWLEDGE_NEEDED.md     # 规则数据和缺失知识跟踪清单
+
+skills/
+  liuyao-charting/               # 可独立发布的确定性六爻排盘 skill
 ```
 
 ## 完整使用说明
