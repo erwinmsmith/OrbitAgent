@@ -20,6 +20,7 @@ All agents should:
 
 - Prefer the bundled script over mental recomputation.
 - Treat JSON output as the source of truth.
+- For 解卦/断卦, read `references/interpretation-workflow.md` and the prompt files under `prompts/` after generating the chart.
 - Avoid cloning OrbitAgent unless the user explicitly needs source comparison or updates.
 - If cloning is needed, clone the public source repository:
 
@@ -28,6 +29,6 @@ git clone https://github.com/erwinmsmith/OrbitAgent.git
 ```
 
 - Clearly separate deterministic chart facts from interpretation.
+- Do not let few-shot examples override the current chart JSON.
 - Ask for `dayStem`, `dayBranch`, and `monthBranch` when the user expects 六神、旬空、旺衰、日月生克.
 - Confirm before writing result files, creating reports, installing packages, or changing remote state.
-

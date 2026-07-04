@@ -10,3 +10,4 @@ git clone https://github.com/erwinmsmith/OrbitAgent.git
 
 Inputs and output contract are documented in `references/workflow.md`.
 
+For 解卦/断卦 tasks, generate the chart before interpretation, then read `references/interpretation-workflow.md` plus `prompts/system-prompt.md`, `prompts/report-template.md`, and `prompts/few-shots.md`. Do not let prompt examples override the current chart JSON.

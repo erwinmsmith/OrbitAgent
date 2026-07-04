@@ -2,7 +2,7 @@
 
 > 六爻纳甲排盘、知识库检索与 LLM 分析 Agent 后端（web / cli）。
 
-Standalone charting skill: [erwinmsmith/liuyao-charting-skill](https://github.com/erwinmsmith/liuyao-charting-skill). The same skill is mirrored in this repository at `skills/liuyao-charting/`.
+Standalone charting and interpretation-prompt skill: [erwinmsmith/liuyao-charting-skill](https://github.com/erwinmsmith/liuyao-charting-skill). The same skill is mirrored in this repository at `skills/liuyao-charting/`.
 
 OrbitAgent 的目标不是让大模型自由“算卦”，而是把六爻业务拆成两层：
 
@@ -100,7 +100,7 @@ docs/
   liuyao/KNOWLEDGE_NEEDED.md     # 规则数据和缺失知识跟踪清单
 
 skills/
-  liuyao-charting/               # 可独立发布的确定性六爻排盘 skill
+  liuyao-charting/               # 可独立发布的六爻排盘 + 解卦提示词 skill
 ```
 
 ## 完整使用说明
@@ -1313,5 +1313,4 @@ CLI 渲染样例（`orbit chat --thinking --debug`）：
 ## License
 
 MIT.
-
 

@@ -13,5 +13,5 @@ Required behavior:
 - Pass exactly one casting mode: `--yao`, `--bits`, `--coins`, `--random-coins`, `--numbers`, `--time-cast`, or `--character`.
 - Pass `--day-stem`, `--day-branch`, and `--month-branch` when the user wants full 六神、旬空、旺衰 output.
 - Parse the JSON result and cite fields from it directly.
+- For interpretation, load `references/interpretation-workflow.md` and the prompt files under `prompts/` after charting.
 - Clone only from `https://github.com/erwinmsmith/OrbitAgent.git` if source code inspection is explicitly needed.
-
