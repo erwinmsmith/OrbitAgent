@@ -14,6 +14,26 @@ Agent profiles live in `agents/`:
 - `hermes.md`: Hermes-style custom tool/profile usage.
 - `generic.md`: Any agent that can run shell commands and read files.
 
+## Installation Pattern
+
+Use the same portable pattern for non-Codex agents:
+
+1. Clone `https://github.com/erwinmsmith/liuyao-charting-skill`.
+2. Point the agent at the `liuyao-charting/` folder.
+3. Add the matching `agents/*.md` profile to that agent's project instructions, system prompt, custom skill config, or tool description.
+4. Register a shell/Python tool that runs from `liuyao-charting/`:
+
+```bash
+python3 scripts/liuyao_chart.py
+```
+
+For Codex, copy the skill folder into the skills directory:
+
+```bash
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
+cp -R liuyao-charting-skill/liuyao-charting "${CODEX_HOME:-$HOME/.codex}/skills/"
+```
+
 ## Required Agent Behavior
 
 All agents should:
